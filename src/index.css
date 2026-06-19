@@ -633,10 +633,12 @@ body {
 }
 
 /* Fullscreen support */
-:fullscreen .app-header {
+:fullscreen .app-header,
+.app-root.is-fullscreen .app-header {
   display: none;
 }
 
-:fullscreen .app-container {
+:fullscreen .app-container,
+.app-root.is-fullscreen .app-container {
   height: 100vh;
 }

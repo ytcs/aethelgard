@@ -28,9 +28,7 @@ import {
   BookOpen,
   Trash2,
   X,
-  MousePointer,
-  Maximize2,
-  Minimize2
+  MousePointer
 } from 'lucide-react';
 
 import { getPdfFromDb, savePdfToDb, clearPdfFromDb } from './utils/db';
@@ -58,27 +56,27 @@ export default function App() {
   const [focusedPanel, setFocusedPanel] = useState<'left' | 'right'>('left');
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // Monitor browser fullscreen state change
+  // Monitor browser fullscreen state changes (including F11 key window-level fullscreen)
   useEffect(() => {
     const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
+      const isFs = (
+        !!document.fullscreenElement ||
+        window.innerHeight === window.screen.height ||
+        (window.outerHeight && window.outerHeight === window.screen.height)
+      );
+      setIsFullscreen(isFs);
     };
+
+    window.addEventListener('resize', handleFullscreenChange);
     document.addEventListener('fullscreenchange', handleFullscreenChange);
+    handleFullscreenChange(); // Initial check
+
     return () => {
+      window.removeEventListener('resize', handleFullscreenChange);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
   }, []);
 
-  const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(err => {
-        console.error(`Error attempting to enable fullscreen mode: ${err.message}`);
-      });
-    } else {
-      document.exitFullscreen();
-    }
-  };
-  
   // Document loading
   const [pdfFilename, setPdfFilename] = useState<string | null>(null);
   const [pdfDocument, setPdfDocument] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
@@ -86,6 +84,30 @@ export default function App() {
   useEffect(() => {
     pdfDocumentRef.current = pdfDocument;
   }, [pdfDocument]);
+
+  // Dynamically resolve page/tab title based on loaded PDF metadata or filename
+  useEffect(() => {
+    if (!pdfDocument) {
+      document.title = 'Aethelgard';
+      return;
+    }
+
+    const resolveTitle = async () => {
+      let docTitle = pdfFilename || 'Aethelgard';
+      try {
+        const meta = await pdfDocument.getMetadata();
+        if (meta?.info?.Title && meta.info.Title.trim() !== '') {
+          docTitle = meta.info.Title.trim();
+        }
+      } catch (err) {
+        console.warn('Failed to retrieve PDF metadata title:', err);
+      }
+      document.title = docTitle;
+    };
+
+    resolveTitle();
+  }, [pdfDocument, pdfFilename]);
+
   const [toc, setToc] = useState<TocItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -645,7 +667,7 @@ export default function App() {
   }
 
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div className={`app-root ${isFullscreen ? 'is-fullscreen' : ''}`} style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       {/* Toast Notification */}
       {toastMessage && <div className="notification-toast">{toastMessage}</div>}
 
@@ -729,18 +751,6 @@ export default function App() {
           >
             {linkedScrolling ? <LinkIcon size={13} /> : <Link2Off size={13} />}
             {linkedScrolling ? 'Pages Linked' : 'Pages Unlinked'}
-          </button>
-
-          <div className="toolbar-divider"></div>
-
-          {/* Fullscreen toggler */}
-          <button 
-            className={`header-btn ${isFullscreen ? 'active' : ''}`}
-            onClick={toggleFullscreen}
-            title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
-          >
-            {isFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-            {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
           </button>
 
           <div className="toolbar-divider"></div>
