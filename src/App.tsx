@@ -66,6 +66,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [initCheckingDb, setInitCheckingDb] = useState(true);
+  const [isRestored, setIsRestored] = useState(false);
   const tocRef = useRef<TocItem[]>([]);
 
   // Panel State
@@ -136,6 +137,8 @@ export default function App() {
 
   // Restore persistence registries when pdfFilename is loaded or changes
   useEffect(() => {
+    setIsRestored(false); // Halt session saving until restoration is applied
+
     if (!pdfFilename) {
       setDrawingsRegistry({});
       setBookmarks([]);
@@ -190,11 +193,13 @@ export default function App() {
       setLayoutMode('split');
       setLinkedScrolling(false);
     }
+
+    setIsRestored(true); // Allow saving now that the state has been restored
   }, [pdfFilename]);
 
   // Save session state to localStorage keyed by active PDF filename
   useEffect(() => {
-    if (!pdfDocument || !pdfFilename) return; // Prevent overwriting on initial boot or no doc
+    if (!pdfDocument || !pdfFilename || !isRestored) return; // Prevent overwriting during initialization
     const session = {
       layoutMode,
       linkedScrolling,
@@ -205,7 +210,7 @@ export default function App() {
       activeSidebarTab,
     };
     localStorage.setItem(`aethelgard_session_${pdfFilename}`, JSON.stringify(session));
-  }, [pdfFilename, layoutMode, linkedScrolling, globalZoom, leftPanel.currentPage, rightPanel.currentPage, sidebarCollapsed, activeSidebarTab, pdfDocument]);
+  }, [pdfFilename, layoutMode, linkedScrolling, globalZoom, leftPanel.currentPage, rightPanel.currentPage, sidebarCollapsed, activeSidebarTab, pdfDocument, isRestored]);
 
   const loadFile = async (file: File) => {
     setLoading(true);
@@ -243,6 +248,7 @@ export default function App() {
         setPdfDocument(null);
         setPdfFilename(null);
         setError(null);
+        setIsRestored(false);
       } catch (err) {
         console.error('Failed to clear PDF cache:', err);
       } finally {
