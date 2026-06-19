@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import type { 
   Stroke, 
@@ -31,6 +31,9 @@ import {
   MousePointer
 } from 'lucide-react';
 
+import { getPdfFromDb, savePdfToDb, clearPdfFromDb } from './utils/db';
+import 'pdfjs-dist/web/pdf_viewer.css';
+
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -53,11 +56,12 @@ export default function App() {
   const [focusedPanel, setFocusedPanel] = useState<'left' | 'right'>('left');
   
   // Document loading
-  const [pdfPath, setPdfPath] = useState('/mfg/main.pdf');
+  const [pdfFilename, setPdfFilename] = useState<string | null>(null);
   const [pdfDocument, setPdfDocument] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
   const [toc, setToc] = useState<TocItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [initCheckingDb, setInitCheckingDb] = useState(true);
   const tocRef = useRef<TocItem[]>([]);
 
   // Panel State
@@ -99,28 +103,70 @@ export default function App() {
     }, 3000);
   };
 
-  // Load persistence registries on mount
+  // Check IndexedDB for cached PDF on mount
   useEffect(() => {
-    const savedDrawings = localStorage.getItem('aethelgard_drawings');
-    const savedBookmarks = localStorage.getItem('aethelgard_bookmarks');
-    const savedHistory = localStorage.getItem('aethelgard_history');
-    
-    if (savedDrawings) {
-      try { setDrawingsRegistry(JSON.parse(savedDrawings)); } catch(e) { console.error(e); }
-    }
-    if (savedBookmarks) {
-      try { setBookmarks(JSON.parse(savedBookmarks)); } catch(e) { console.error(e); }
-    }
-    if (savedHistory) {
-      try { setHistory(JSON.parse(savedHistory)); } catch(e) { console.error(e); }
+    const loadCachedPdf = async () => {
+      try {
+        const cached = await getPdfFromDb();
+        if (cached) {
+          setPdfFilename(cached.filename);
+          setLoading(true);
+          const loadingTask = pdfjsLib.getDocument({ data: cached.data });
+          const doc = await loadingTask.promise;
+          setPdfDocument(doc);
+          showToast('Restored offline PDF document.');
+
+          const flatOutline = await extractToc(doc);
+          setToc(flatOutline);
+        }
+      } catch (err: any) {
+        console.error('Failed to restore cached PDF:', err);
+        setError(`Failed to restore cached document: ${err.message || err.toString()}`);
+      } finally {
+        setInitCheckingDb(false);
+      }
+    };
+    loadCachedPdf();
+  }, []);
+
+  // Restore persistence registries when pdfFilename is loaded or changes
+  useEffect(() => {
+    if (!pdfFilename) {
+      setDrawingsRegistry({});
+      setBookmarks([]);
+      setHistory([]);
+      return;
     }
 
-    // Restore reader session positions
-    const savedSession = localStorage.getItem('aethelgard_reader_session');
+    const savedDrawings = localStorage.getItem(`aethelgard_drawings_${pdfFilename}`);
+    const savedBookmarks = localStorage.getItem(`aethelgard_bookmarks_${pdfFilename}`);
+    const savedHistory = localStorage.getItem(`aethelgard_history_${pdfFilename}`);
+    
+    if (savedDrawings) {
+      try { setDrawingsRegistry(JSON.parse(savedDrawings)); } catch(e) { setDrawingsRegistry({}); }
+    } else {
+      setDrawingsRegistry({});
+    }
+    if (savedBookmarks) {
+      try { setBookmarks(JSON.parse(savedBookmarks)); } catch(e) { setBookmarks([]); }
+    } else {
+      setBookmarks([]);
+    }
+    if (savedHistory) {
+      try { setHistory(JSON.parse(savedHistory)); } catch(e) { setHistory([]); }
+    } else {
+      setHistory([]);
+    }
+
+    // Reset tracking refs for scroll logging
+    lastLogPage.current = { left: 1, right: 1 };
+    lastLogTime.current = 0;
+
+    // Restore reader session positions specific to this document
+    const savedSession = localStorage.getItem(`aethelgard_session_${pdfFilename}`);
     if (savedSession) {
       try {
         const session = JSON.parse(savedSession);
-        if (session.pdfPath) setPdfPath(session.pdfPath);
         if (session.layoutMode) setLayoutMode(session.layoutMode);
         if (session.linkedScrolling !== undefined) setLinkedScrolling(session.linkedScrolling);
         if (session.globalZoom) setGlobalZoom(session.globalZoom);
@@ -131,14 +177,20 @@ export default function App() {
       } catch (e) {
         console.error('Failed to load saved reader session', e);
       }
+    } else {
+      // Default values for a new book
+      setLeftPanel({ id: 'left', mode: 'pdf', currentPage: 1 });
+      setRightPanel({ id: 'right', mode: 'pdf', currentPage: 1 });
+      setGlobalZoom(1.0);
+      setLayoutMode('split');
+      setLinkedScrolling(false);
     }
-  }, []);
+  }, [pdfFilename]);
 
-  // Save session state to localStorage
+  // Save session state to localStorage keyed by active PDF filename
   useEffect(() => {
-    if (!pdfDocument) return; // Prevent overwriting on initial boot
+    if (!pdfDocument || !pdfFilename) return; // Prevent overwriting on initial boot or no doc
     const session = {
-      pdfPath,
       layoutMode,
       linkedScrolling,
       globalZoom,
@@ -147,36 +199,51 @@ export default function App() {
       sidebarCollapsed,
       activeSidebarTab,
     };
-    localStorage.setItem('aethelgard_reader_session', JSON.stringify(session));
-  }, [pdfPath, layoutMode, linkedScrolling, globalZoom, leftPanel.currentPage, rightPanel.currentPage, sidebarCollapsed, activeSidebarTab, pdfDocument]);
+    localStorage.setItem(`aethelgard_session_${pdfFilename}`, JSON.stringify(session));
+  }, [pdfFilename, layoutMode, linkedScrolling, globalZoom, leftPanel.currentPage, rightPanel.currentPage, sidebarCollapsed, activeSidebarTab, pdfDocument]);
 
-  // Load PDF Document when path changes
-  useEffect(() => {
-    const loadPdf = async () => {
+  const loadFile = async (file: File) => {
+    setLoading(true);
+    setError(null);
+    setPdfDocument(null);
+    setToc([]);
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      // Cache binary in IndexedDB
+      await savePdfToDb(file.name, arrayBuffer);
+      setPdfFilename(file.name);
+
+      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+      const doc = await loadingTask.promise;
+      setPdfDocument(doc);
+      showToast('Document loaded and cached offline.');
+
+      const flatOutline = await extractToc(doc);
+      setToc(flatOutline);
+    } catch (err: any) {
+      console.error('Failed to load selected PDF:', err);
+      setError(`Failed to load PDF document: ${err.message || err.toString()}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const closeDocument = async () => {
+    if (window.confirm('Close this document? All your annotations and history will remain saved.')) {
       setLoading(true);
-      setError(null);
-      setPdfDocument(null);
-      setToc([]);
-
       try {
-        const loadingTask = pdfjsLib.getDocument({ url: pdfPath });
-        const doc = await loadingTask.promise;
-        setPdfDocument(doc);
-        showToast('PDF loaded successfully!');
-
-        // Extract TOC (Outline)
-        const flatOutline = await extractToc(doc);
-        setToc(flatOutline);
-      } catch (err: any) {
-        console.error('Failed to load PDF:', err);
-        setError(`Failed to load PDF document: ${err.message || err.toString()}`);
+        await clearPdfFromDb();
+        setPdfDocument(null);
+        setPdfFilename(null);
+        setError(null);
+      } catch (err) {
+        console.error('Failed to clear PDF cache:', err);
       } finally {
         setLoading(false);
       }
-    };
-
-    loadPdf();
-  }, [pdfPath]);
+    }
+  };
 
   // Extract outline items recursively
   const extractToc = async (pdf: pdfjsLib.PDFDocumentProxy): Promise<TocItem[]> => {
@@ -270,7 +337,9 @@ export default function App() {
         item => !(item.pageNumber === pageNumber && item.reason === newEntry.reason && now - item.timestamp < 10000)
       );
       const updated = [newEntry, ...filtered].slice(0, 30);
-      localStorage.setItem('aethelgard_history', JSON.stringify(updated));
+      if (pdfFilename) {
+        localStorage.setItem(`aethelgard_history_${pdfFilename}`, JSON.stringify(updated));
+      }
       return updated;
     });
 
@@ -307,11 +376,12 @@ export default function App() {
 
   // Manage Bookmarks
   const toggleBookmark = (pageNumber: number) => {
+    if (!pdfFilename) return;
     const existing = bookmarks.find(b => b.pageNumber === pageNumber);
     if (existing) {
       const updated = bookmarks.filter(b => b.pageNumber !== pageNumber);
       setBookmarks(updated);
-      localStorage.setItem('aethelgard_bookmarks', JSON.stringify(updated));
+      localStorage.setItem(`aethelgard_bookmarks_${pdfFilename}`, JSON.stringify(updated));
       showToast(`Removed Bookmark for Page ${pageNumber}`);
     } else {
       setBookmarkModalPage(pageNumber);
@@ -321,6 +391,7 @@ export default function App() {
   };
 
   const handleSaveBookmark = () => {
+    if (!pdfFilename) return;
     const newBookmark: Bookmark = {
       id: Math.random().toString(36).substring(2, 9),
       pageNumber: bookmarkModalPage,
@@ -329,19 +400,20 @@ export default function App() {
     };
     const updated = [...bookmarks, newBookmark];
     setBookmarks(updated);
-    localStorage.setItem('aethelgard_bookmarks', JSON.stringify(updated));
+    localStorage.setItem(`aethelgard_bookmarks_${pdfFilename}`, JSON.stringify(updated));
     setBookmarkModalOpen(false);
     showToast(`Added Bookmark: "${newBookmark.label}"`);
   };
 
   // Save Drawings
   const handleSaveDrawings = (pageNumber: number, strokes: Stroke[]) => {
+    if (!pdfFilename) return;
     const updated = {
       ...drawingsRegistry,
       [pageNumber]: strokes,
     };
     setDrawingsRegistry(updated);
-    localStorage.setItem('aethelgard_drawings', JSON.stringify(updated));
+    localStorage.setItem(`aethelgard_drawings_${pdfFilename}`, JSON.stringify(updated));
   };
 
   // Clear drawings on currently focused panel's active page
@@ -372,6 +444,7 @@ export default function App() {
 
   // Import/Export Data
   const exportData = () => {
+    if (!pdfFilename) return;
     const data = {
       drawings: drawingsRegistry,
       bookmarks: bookmarks,
@@ -385,7 +458,7 @@ export default function App() {
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.download = `aethelgard_reader_backup_${new Date().toISOString().slice(0, 10)}.json`;
+    link.download = `aethelgard_backup_${pdfFilename.replace(/\.pdf$/i, '')}_${new Date().toISOString().slice(0, 10)}.json`;
     link.href = url;
     link.click();
     showToast('Reading data exported!');
@@ -400,17 +473,17 @@ export default function App() {
     reader.onload = (event) => {
       try {
         const data = JSON.parse(event.target?.result as string);
-        if (data.drawings) {
+        if (data.drawings && pdfFilename) {
           setDrawingsRegistry(data.drawings);
-          localStorage.setItem('aethelgard_drawings', JSON.stringify(data.drawings));
+          localStorage.setItem(`aethelgard_drawings_${pdfFilename}`, JSON.stringify(data.drawings));
         }
-        if (data.bookmarks) {
+        if (data.bookmarks && pdfFilename) {
           setBookmarks(data.bookmarks);
-          localStorage.setItem('aethelgard_bookmarks', JSON.stringify(data.bookmarks));
+          localStorage.setItem(`aethelgard_bookmarks_${pdfFilename}`, JSON.stringify(data.bookmarks));
         }
-        if (data.history) {
+        if (data.history && pdfFilename) {
           setHistory(data.history);
-          localStorage.setItem('aethelgard_history', JSON.stringify(data.history));
+          localStorage.setItem(`aethelgard_history_${pdfFilename}`, JSON.stringify(data.history));
         }
         if (data.scratchpad) {
           localStorage.setItem('aethelgard_scratchpad_strokes', JSON.stringify(data.scratchpad));
@@ -423,6 +496,46 @@ export default function App() {
     };
     reader.readAsText(file);
   };
+
+  if (initCheckingDb) {
+    return (
+      <div style={{
+        height: '100vh',
+        width: '100vw',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'var(--bg-app)',
+        color: 'var(--text-secondary)',
+        fontFamily: 'var(--font-sans)'
+      }}>
+        <div style={{
+          width: '30px',
+          height: '30px',
+          border: '2px solid var(--border-light)',
+          borderTopColor: 'var(--accent-primary)',
+          borderRadius: '50%',
+          animation: 'spin 1s linear infinite',
+          marginBottom: '15px'
+        }}></div>
+        <span style={{ fontSize: '0.75rem', letterSpacing: '1px' }}>RESTORING SESSION...</span>
+        <style>{`
+          @keyframes spin { to { transform: rotate(360deg); } }
+        `}</style>
+      </div>
+    );
+  }
+
+  if (!pdfDocument) {
+    return (
+      <WelcomeScreen 
+        onFileSelect={loadFile} 
+        error={error} 
+        loading={loading}
+      />
+    );
+  }
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -444,26 +557,42 @@ export default function App() {
         </div>
 
         <div className="header-controls">
-          {/* PDF Selector */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Book:</span>
-            <select
-              value={pdfPath}
-              onChange={(e) => setPdfPath(e.target.value)}
-              style={{
-                background: 'var(--bg-panel)',
-                color: 'var(--text-primary)',
-                border: '1px solid var(--border-light)',
-                borderRadius: '6px',
-                padding: '4px 10px',
-                fontSize: '0.8rem',
-                outline: 'none',
-                fontFamily: 'var(--font-sans)',
-              }}
-            >
-              <option value="/mfg/main.pdf">mfg/main.pdf (Current book)</option>
-            </select>
-          </div>
+          {/* Active PDF Filename */}
+          {pdfFilename && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <BookOpen size={13} style={{ color: 'var(--accent-primary)' }} />
+                <span style={{ 
+                  fontWeight: 500, 
+                  color: 'var(--text-primary)', 
+                  maxWidth: '180px', 
+                  overflow: 'hidden', 
+                  textOverflow: 'ellipsis', 
+                  whiteSpace: 'nowrap' 
+                }}>
+                  {pdfFilename}
+                </span>
+              </span>
+              <button 
+                onClick={closeDocument}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--text-muted)',
+                  cursor: 'pointer',
+                  padding: '4px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  transition: 'color 0.2s',
+                }}
+                title="Close Document"
+                onMouseEnter={(e) => e.currentTarget.style.color = '#ef4444'}
+                onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-muted)'}
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
 
           <div className="toolbar-divider"></div>
 
@@ -799,3 +928,184 @@ export default function App() {
     </div>
   );
 }
+
+interface WelcomeScreenProps {
+  onFileSelect: (file: File) => void;
+  error: string | null;
+  loading: boolean;
+}
+
+const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFileSelect, error, loading }) => {
+  const [dragActive, setDragActive] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const file = e.dataTransfer.files[0];
+      if (file.type === "application/pdf" || file.name.toLowerCase().endsWith('.pdf')) {
+        onFileSelect(file);
+      } else {
+        alert("Please drop a valid PDF file.");
+      }
+    }
+  };
+
+  const handleButtonClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    if (e.target.files && e.target.files[0]) {
+      onFileSelect(e.target.files[0]);
+    }
+  };
+
+  return (
+    <div style={{
+      height: '100vh',
+      width: '100vw',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: 'var(--bg-app)',
+      padding: '20px',
+      fontFamily: 'var(--font-sans)',
+    }}>
+      <div 
+        onDragEnter={handleDrag}
+        onDragOver={handleDrag}
+        onDragLeave={handleDrag}
+        onDrop={handleDrop}
+        style={{
+          maxWidth: '520px',
+          width: '100%',
+          background: 'var(--bg-sidebar)',
+          border: dragActive ? '2px dashed var(--accent-primary)' : '1px solid var(--border-light)',
+          borderRadius: '16px',
+          padding: '40px 30px',
+          textAlign: 'center',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+          transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          transform: dragActive ? 'scale(1.02)' : 'scale(1)',
+        }}
+      >
+        <div style={{
+          fontFamily: 'var(--font-heading)',
+          fontSize: '2rem',
+          fontWeight: 700,
+          background: 'var(--accent-gradient)',
+          WebkitBackgroundClip: 'text',
+          WebkitTextFillColor: 'transparent',
+          letterSpacing: '4px',
+          marginBottom: '4px',
+        }}>
+          AETHELGARD
+        </div>
+        <div style={{
+          fontSize: '0.75rem',
+          color: 'var(--text-secondary)',
+          letterSpacing: '3px',
+          textTransform: 'uppercase',
+          marginBottom: '32px',
+        }}>
+          Minimalist Offline Reader
+        </div>
+
+        <div style={{
+          width: '72px',
+          height: '72px',
+          borderRadius: '50%',
+          background: 'rgba(133, 150, 129, 0.06)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          marginBottom: '24px',
+          border: '1px solid rgba(133, 150, 129, 0.15)',
+        }}>
+          <Upload size={28} style={{ color: 'var(--accent-primary)' }} />
+        </div>
+
+        <p style={{
+          fontSize: '0.9rem',
+          color: 'var(--text-primary)',
+          lineHeight: '1.6',
+          marginBottom: '8px',
+          fontWeight: 500,
+        }}>
+          Drag and drop a PDF file here
+        </p>
+        <p style={{
+          fontSize: '0.8rem',
+          color: 'var(--text-secondary)',
+          lineHeight: '1.5',
+          marginBottom: '28px',
+          maxWidth: '320px',
+        }}>
+          Your file is cached locally in browser IndexedDB. No server uploads.
+        </p>
+
+        <input 
+          ref={fileInputRef}
+          type="file" 
+          accept=".pdf" 
+          onChange={handleChange} 
+          style={{ display: 'none' }}
+        />
+
+        <button 
+          onClick={handleButtonClick}
+          disabled={loading}
+          style={{
+            background: 'var(--accent-gradient)',
+            border: 'none',
+            borderRadius: '8px',
+            color: '#141517',
+            padding: '12px 28px',
+            fontSize: '0.85rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            boxShadow: '0 4px 12px rgba(133, 150, 129, 0.25)',
+            transition: 'transform 0.2s, box-shadow 0.2s',
+            outline: 'none',
+          }}
+        >
+          {loading ? 'Reading document...' : 'Choose File'}
+        </button>
+
+        {error && (
+          <div style={{
+            marginTop: '20px',
+            padding: '10px 16px',
+            borderRadius: '6px',
+            background: 'rgba(239, 68, 68, 0.1)',
+            border: '1px solid rgba(239, 68, 68, 0.2)',
+            color: '#ef4444',
+            fontSize: '0.75rem',
+            maxWidth: '100%',
+            wordBreak: 'break-all',
+          }}>
+            {error}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};

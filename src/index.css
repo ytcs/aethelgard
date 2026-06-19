@@ -614,3 +614,16 @@ body {
   from { transform: translateY(100px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
 }
+
+/* Custom styling for PDF Annotation Layer to match Zen theme */
+.annotationLayer {
+  opacity: 0.85;
+}
+.annotationLayer .linkAnnotation > a {
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+.annotationLayer .linkAnnotation > a:hover {
+  background-color: rgba(133, 150, 129, 0.18) !important;
+  box-shadow: 0 0 4px rgba(133, 150, 129, 0.3) !important;
+  border-radius: 2px;
+}

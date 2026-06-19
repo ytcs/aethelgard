@@ -56,6 +56,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
   const isScrollingToPageRef = useRef<boolean>(false);
   const scrollTimeoutRef = useRef<any>(null);
   const lastScrolledPageRef = useRef<number>(1);
+  const isInitRef = useRef<boolean>(true);
   
   const [numPages, setNumPages] = useState<number>(0);
   const [renderedPages, setRenderedPages] = useState<Record<number, boolean>>({});
@@ -130,28 +131,47 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
     calculateSizes();
   }, [zoom, aspectRatio, pdfDocument]);
 
-  // Clear cache and trigger redraw of rendered pages when zoom factor changes
+  // Reset refs when pdfDocument changes to handle fresh document loading cleanly
+  useEffect(() => {
+    isInitRef.current = true;
+    lastScrolledPageRef.current = currentPage;
+  }, [pdfDocument]);
+
+  // Clear cache and trigger redraw of rendered pages when zoom factor or document changes
   useEffect(() => {
     setRenderedPages({});
-  }, [zoom]);
+  }, [zoom, pdfDocument]);
 
-  // Scroll to active page when explicitly changed by external inputs (TOC, history bookmarks)
+  // Scroll to active page when explicitly changed by external inputs or on initial mount
   useEffect(() => {
-    if (isScrollingToPageRef.current) return;
-    if (currentPage === lastScrolledPageRef.current) return; // Skip snapping if page was scrolled to naturally
+    const scrollToPage = () => {
+      const pageEl = pageRefs.current[currentPage];
+      if (pageEl && containerRef.current) {
+        isScrollingToPageRef.current = true;
+        pageEl.scrollIntoView({ behavior: 'auto', block: 'start' });
+        lastScrolledPageRef.current = currentPage;
+        
+        if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+        scrollTimeoutRef.current = setTimeout(() => {
+          isScrollingToPageRef.current = false;
+        }, 200);
+      }
+    };
 
-    const pageEl = pageRefs.current[currentPage];
-    if (pageEl && containerRef.current) {
-      isScrollingToPageRef.current = true;
-      pageEl.scrollIntoView({ behavior: 'auto', block: 'start' });
-      lastScrolledPageRef.current = currentPage;
-      
-      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
-      scrollTimeoutRef.current = setTimeout(() => {
-        isScrollingToPageRef.current = false;
-      }, 150);
+    if (numPages > 0) {
+      const isInitial = isInitRef.current;
+      const isExplicitJump = currentPage !== lastScrolledPageRef.current;
+
+      if (isInitial || isExplicitJump) {
+        // Run with a slight timeout to ensure DOM layout has fully completed
+        const timer = setTimeout(scrollToPage, 100);
+        if (isInitial) {
+          isInitRef.current = false;
+        }
+        return () => clearTimeout(timer);
+      }
     }
-  }, [currentPage]);
+  }, [currentPage, numPages, pdfDocument]);
 
   // Setup page intersection observer to mount canvases dynamically (Caches Rendered Canvases)
   useEffect(() => {
@@ -201,7 +221,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
 
     const activePageObserver = new IntersectionObserver(
       (entries) => {
-        if (isScrollingToPageRef.current) return;
+        if (isScrollingToPageRef.current || isInitRef.current) return;
 
         entries.forEach((entry) => {
           if (entry.isIntersecting) {
@@ -290,6 +310,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
               colorMap={colorMap}
               onDrawStart={() => registerViewpoint(p, 'annotated')}
               onPanelFocus={onFocusPanel}
+              onJumpToPage={(targetPage) => onPageChange(targetPage, 'jump')}
             />
           )}
         </div>

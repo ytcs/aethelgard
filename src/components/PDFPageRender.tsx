@@ -16,6 +16,7 @@ interface PDFPageRenderProps {
   colorMap: Record<DrawingColor, string>;
   onDrawStart: () => void;
   onPanelFocus: () => void;
+  onJumpToPage?: (pageNumber: number) => void;
 }
 
 export const PDFPageRender: React.FC<PDFPageRenderProps> = ({
@@ -31,9 +32,11 @@ export const PDFPageRender: React.FC<PDFPageRenderProps> = ({
   colorMap,
   onDrawStart,
   onPanelFocus,
+  onJumpToPage,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawingCanvasRef = useRef<HTMLCanvasElement>(null);
+  const annotationLayerRef = useRef<HTMLDivElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const currentPoints = useRef<Point[]>([]);
 
@@ -68,6 +71,67 @@ export const PDFPageRender: React.FC<PDFPageRenderProps> = ({
 
         renderTask = page.render(renderContext);
         await renderTask.promise;
+
+        // Render annotation layer for links/hyperlinks
+        if (isCancelled) return;
+        const annotationLayerDiv = annotationLayerRef.current;
+        if (annotationLayerDiv) {
+          annotationLayerDiv.innerHTML = '';
+          const annotations = await page.getAnnotations();
+          if (isCancelled) return;
+
+          if (annotations.length > 0) {
+            const linkService = {
+              navigateTo: async (dest: any) => {
+                try {
+                  let targetDest = dest;
+                  if (typeof dest === 'string') {
+                    targetDest = await pdfDocument.getDestination(dest);
+                  }
+                  if (Array.isArray(targetDest)) {
+                    const destRef = targetDest[0];
+                    const pageIdx = await pdfDocument.getPageIndex(destRef);
+                    const targetPage = pageIdx + 1;
+                    if (onJumpToPage) {
+                      onJumpToPage(targetPage);
+                    }
+                  }
+                } catch (err) {
+                  console.error('Error navigating to destination:', err);
+                }
+              },
+              getDestinationHash: (_dest: any) => '#',
+              getAnchorUrl: (_hash: any) => '#',
+              setHash: (_hash: any) => {},
+              executeNamedAction: (_action: any) => {},
+              cachePageRef: () => {},
+              isPageVisible: () => true,
+              isPageRendered: () => true,
+            };
+
+            const annotationLayer = new pdfjsLib.AnnotationLayer({
+              div: annotationLayerDiv,
+              page: page,
+              viewport: pageViewport.clone({ dontFlip: true }),
+              linkService: linkService,
+              accessibilityManager: null,
+              annotationCanvasMap: null,
+              annotationEditorUIManager: null,
+              structTreeLayer: null,
+              commentManager: null,
+              annotationStorage: null
+            } as any);
+
+            await annotationLayer.render({
+              viewport: pageViewport.clone({ dontFlip: true }),
+              div: annotationLayerDiv,
+              annotations: annotations,
+              page: page,
+              linkService: linkService,
+              renderForms: false,
+            } as any);
+          }
+        }
       } catch (err: any) {
         if (err.name !== 'RenderingCancelledException') {
           console.error(`Error rendering page ${pageNumber}:`, err);
@@ -240,6 +304,19 @@ export const PDFPageRender: React.FC<PDFPageRenderProps> = ({
   return (
     <div style={{ position: 'relative', width: `${width}px`, height: `${height}px` }}>
       <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height: '100%' }} />
+      <div 
+        ref={annotationLayerRef} 
+        className="annotationLayer" 
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
+          zIndex: 1,
+          pointerEvents: tool === 'select' ? 'auto' : 'none',
+        }}
+      />
       <canvas
         ref={drawingCanvasRef}
         style={{
