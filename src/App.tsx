@@ -61,8 +61,9 @@ export default function App() {
     const handleFullscreenChange = () => {
       const isFs = (
         !!document.fullscreenElement ||
-        window.innerHeight === window.screen.height ||
-        (window.outerHeight && window.outerHeight === window.screen.height)
+        (window.innerHeight === window.screen.height &&
+         window.outerHeight !== undefined &&
+         (window.outerHeight - window.innerHeight < 20))
       );
       setIsFullscreen(isFs);
     };
