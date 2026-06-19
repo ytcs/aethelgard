@@ -1,73 +1,60 @@
-# React + TypeScript + Vite
+# aethelgard
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A quiet, distraction-free web application designed for reading long technical PDF books. Built with a focus on cognitive clarity, fluid navigation, and organic note-taking.
 
-Currently, two official plugins are available:
+---
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## The Philosophy
 
-## React Compiler
+Technical books demand focus. Traditional PDF readers introduce cognitive fatigue through cluttered toolbars, flashing AI pop-ups, and snapping viewports. **aethelgard** is built on the principles of **Nordic Minimalism** to create a digital "Zen mode" workspace:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **Earthy Palettes:** Muted off-black backgrounds, sage greens, warm clays, and sand gold drawing tones desaturated to resemble natural paper inks.
+- **Cognitive Clarity:** Sidebar collapsed by default. No glowing gradients or floating chatbots.
+- **Focus-First Layouts:** Dual-pane split views to pin reference materials (like theorems or figures) on one panel while scrolling through explanations on the other.
 
-## Expanding the ESLint configuration
+---
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Core Features
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+1. **Persistent Canvas Continuous Scroll:**
+   - Seamless vertical page scrolling.
+   - Canvases are lazy-loaded when entering the viewport and kept cached in the DOM, making scrolling back and forth native-smooth and lag-free.
+2. **Fit-to-Width default zoom:**
+   - Automatically fits pages to the panel width on document load.
+3. **Smart Viewpoint History:**
+   - A quiet background observer remembers where you've been. It ignores sequential page flips, but logs out-of-order jumps, bookmark clicks, and pages read for more than 5 seconds.
+4. **Transparent Scribble Overlay:**
+   - Sketch, highlight, or erase directly over the PDF text. Drawings scale and align automatically during viewport zooms.
+5. **Math Scratchpad:**
+   - Switch any viewer panel into a dedicated drawing whiteboard for deriving equations, supporting neon-free desaturated colors and Bezier-smoothed strokes.
+6. **Session Memory:**
+   - Automatically remembers your document paths, layout split, zoom factors, and page positions across browser refreshes.
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+---
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Installation & Setup
+
+Ensure you have **Node.js** and **npm** installed.
+
+```bash
+# Clone the repository
+git clone https://github.com/ytcs/aethelgard.git
+cd aethelgard
+
+# Install dependencies
+npm install
+
+# Start the Vite development server
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+The application will launch locally at **http://localhost:5173/**.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+---
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+## Technology Stack
+
+- **Core:** React, TypeScript, Vite
+- **PDF Engine:** PDF.js (Mozilla)
+- **Styling:** Vanilla CSS3
+- **Icons:** Lucide React
