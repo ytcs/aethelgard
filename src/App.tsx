@@ -28,7 +28,9 @@ import {
   BookOpen,
   Trash2,
   X,
-  MousePointer
+  MousePointer,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
 
 import { getPdfFromDb, savePdfToDb, clearPdfFromDb } from './utils/db';
@@ -54,6 +56,28 @@ export default function App() {
   const [linkedScrolling, setLinkedScrolling] = useState(false);
   const [globalZoom, setGlobalZoom] = useState(1.0);
   const [focusedPanel, setFocusedPanel] = useState<'left' | 'right'>('left');
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Monitor browser fullscreen state change
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(err => {
+        console.error(`Error attempting to enable fullscreen mode: ${err.message}`);
+      });
+    } else {
+      document.exitFullscreen();
+    }
+  };
   
   // Document loading
   const [pdfFilename, setPdfFilename] = useState<string | null>(null);
@@ -709,6 +733,18 @@ export default function App() {
 
           <div className="toolbar-divider"></div>
 
+          {/* Fullscreen toggler */}
+          <button 
+            className={`header-btn ${isFullscreen ? 'active' : ''}`}
+            onClick={toggleFullscreen}
+            title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+          >
+            {isFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+            {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+          </button>
+
+          <div className="toolbar-divider"></div>
+
           {/* Data backups */}
           <button className="header-btn" title="Export scribbles & bookmarks" onClick={exportData}>
             <Download size={13} /> Export Backup
@@ -880,9 +916,8 @@ export default function App() {
             )
           )}
 
-          {/* Shared Floating Drawing Toolbar at Bottom */}
+          {/* Shared Floating Drawing Toolbar at Left */}
           <div className="drawing-toolbar">
-            <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '1px' }}>SCRIBBLE:</span>
             
             {/* Tool picker */}
             <div className="tool-group">
@@ -891,28 +926,28 @@ export default function App() {
                 onClick={() => setActiveTool('select')}
                 title="Mouse Cursor (Text selection/navigation)"
               >
-                <MousePointer size={15} />
+                <MousePointer size={13} />
               </button>
               <button 
                 className={`tool-btn ${activeTool === 'pencil' ? 'active' : ''}`}
                 onClick={() => setActiveTool('pencil')}
                 title="Pencil Drawing"
               >
-                <PenTool size={15} />
+                <PenTool size={13} />
               </button>
               <button 
                 className={`tool-btn ${activeTool === 'highlighter' ? 'active' : ''}`}
                 onClick={() => setActiveTool('highlighter')}
                 title="Highlighter Tool"
               >
-                <Highlighter size={15} />
+                <Highlighter size={13} />
               </button>
               <button 
                 className={`tool-btn ${activeTool === 'eraser' ? 'active' : ''}`}
                 onClick={() => setActiveTool('eraser')}
                 title="Eraser (Erase strokes)"
               >
-                <Eraser size={15} />
+                <Eraser size={13} />
               </button>
             </div>
 
@@ -936,22 +971,22 @@ export default function App() {
             <div className="brush-size-select" title="Brush Thickness">
               <div 
                 className={`brush-dot ${brushSize === 2 ? 'active' : ''}`}
-                style={{ width: '5px', height: '5px' }}
+                style={{ width: '4px', height: '4px' }}
                 onClick={() => setBrushSize(2)}
               />
               <div 
                 className={`brush-dot ${brushSize === 5 ? 'active' : ''}`}
-                style={{ width: '8px', height: '8px' }}
+                style={{ width: '7px', height: '7px' }}
                 onClick={() => setBrushSize(5)}
               />
               <div 
                 className={`brush-dot ${brushSize === 10 ? 'active' : ''}`}
-                style={{ width: '11px', height: '11px' }}
+                style={{ width: '10px', height: '10px' }}
                 onClick={() => setBrushSize(10)}
               />
               <div 
                 className={`brush-dot ${brushSize === 18 ? 'active' : ''}`}
-                style={{ width: '14px', height: '14px' }}
+                style={{ width: '13px', height: '13px' }}
                 onClick={() => setBrushSize(18)}
               />
             </div>
@@ -965,7 +1000,7 @@ export default function App() {
               title={`Clear all scribbles on Page ${focusedPanel === 'left' ? leftPanel.currentPage : rightPanel.currentPage}`}
               style={{ color: '#c97b70' }}
             >
-              <Trash2 size={15} />
+              <Trash2 size={13} />
             </button>
           </div>
         </div>

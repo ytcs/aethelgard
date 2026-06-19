@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useLayoutEffect } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import type { Stroke, DrawingTool, DrawingColor, BrushSize, PageDrawingsRegistry } from '../types';
 import { PDFPageRender } from './PDFPageRender';
@@ -27,7 +27,7 @@ interface PDFViewerProps {
   colorMap: Record<DrawingColor, string>;
   isBookmarked: boolean;
   onToggleBookmark: () => void;
-  registerViewpoint: (page: number, reason: 'jump' | 'read' | 'toc' | 'annotated') => void;
+  registerViewpoint: (pageNumber: number, reason: 'jump' | 'read' | 'toc' | 'annotated' | 'scroll') => void;
   onSwitchToWhiteboard: () => void;
   onFocusPanel: () => void;
 }
@@ -58,12 +58,17 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
   const lastScrolledPageRef = useRef<number>(1);
   const isInitRef = useRef<boolean>(true);
   
+  const basePageWidthRef = useRef<number>(600);
+  const scrollRatioRef = useRef<number | null>(null);
+  const isFirstDimensionsReadyRef = useRef<boolean>(true);
+  
   const [numPages, setNumPages] = useState<number>(0);
   const [renderedPages, setRenderedPages] = useState<Record<number, boolean>>({});
   const [pageWidth, setPageWidth] = useState<number>(600);
   const [pageHeight, setPageHeight] = useState<number>(840);
   const [aspectRatio, setAspectRatio] = useState<number>(1.414);
   const dwellTimerRef = useRef<any>(null);
+  const [dimensionsReady, setDimensionsReady] = useState<boolean>(false);
 
   // Set total pages
   useEffect(() => {
@@ -98,6 +103,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
         const baseViewport = firstPage.getViewport({ scale: 1.0 });
         const ratio = baseViewport.height / baseViewport.width;
         setAspectRatio(ratio);
+        basePageWidthRef.current = baseViewport.width;
 
         // Fit to width: container width minus padding (40px)
         const containerWidth = containerRef.current.clientWidth - 40;
@@ -106,34 +112,55 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
         onZoomChange(fitScale);
         setPageWidth(containerWidth);
         setPageHeight(containerWidth * ratio);
+        setDimensionsReady(true);
       } catch (err) {
         console.error('Failed to initialize dimensions:', err);
       }
     };
 
+    setDimensionsReady(false);
     initDimensions();
   }, [pdfDocument]);
 
-  // Recalculate dimensions when zoom changes
-  useEffect(() => {
-    if (!pdfDocument) return;
-    const calculateSizes = async () => {
-      try {
-        const firstPage = await pdfDocument.getPage(1);
-        const baseViewport = firstPage.getViewport({ scale: 1.0 });
-        const calculatedWidth = baseViewport.width * zoom;
-        setPageWidth(calculatedWidth);
-        setPageHeight(calculatedWidth * aspectRatio);
-      } catch (err) {
-        console.error(err);
-      }
-    };
-    calculateSizes();
-  }, [zoom, aspectRatio, pdfDocument]);
+  // Recalculate dimensions and capture scroll ratio when zoom changes
+  useLayoutEffect(() => {
+    if (!pdfDocument || !containerRef.current || !dimensionsReady) return;
+    
+    // 1. Capture current scroll ratio before updating page sizes
+    const container = containerRef.current;
+    if (isFirstDimensionsReadyRef.current) {
+      isFirstDimensionsReadyRef.current = false;
+    } else {
+      const ratio = container.scrollTop / container.scrollHeight;
+      scrollRatioRef.current = ratio;
+    }
+
+    // 2. Calculate and set new page sizes
+    const calculatedWidth = basePageWidthRef.current * zoom;
+    setPageWidth(calculatedWidth);
+    setPageHeight(calculatedWidth * aspectRatio);
+  }, [zoom, aspectRatio, pdfDocument, dimensionsReady]);
+
+  // Apply scroll ratio after layout shift occurs from pageHeight change
+  useLayoutEffect(() => {
+    if (scrollRatioRef.current !== null && containerRef.current && dimensionsReady) {
+      const container = containerRef.current;
+      isScrollingToPageRef.current = true;
+      
+      container.scrollTop = scrollRatioRef.current * container.scrollHeight;
+      scrollRatioRef.current = null;
+
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+      scrollTimeoutRef.current = setTimeout(() => {
+        isScrollingToPageRef.current = false;
+      }, 150);
+    }
+  }, [pageHeight, dimensionsReady]);
 
   // Reset refs when pdfDocument changes to handle fresh document loading cleanly
   useEffect(() => {
     isInitRef.current = true;
+    isFirstDimensionsReadyRef.current = true;
     lastScrolledPageRef.current = currentPage;
   }, [pdfDocument]);
 
@@ -154,24 +181,22 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
         if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
         scrollTimeoutRef.current = setTimeout(() => {
           isScrollingToPageRef.current = false;
-        }, 200);
+          isInitRef.current = false; // Only mark initialization complete after the first scroll has settled
+        }, 250);
       }
     };
 
-    if (numPages > 0) {
+    if (numPages > 0 && dimensionsReady) {
       const isInitial = isInitRef.current;
       const isExplicitJump = currentPage !== lastScrolledPageRef.current;
 
       if (isInitial || isExplicitJump) {
         // Run with a slight timeout to ensure DOM layout has fully completed
         const timer = setTimeout(scrollToPage, 100);
-        if (isInitial) {
-          isInitRef.current = false;
-        }
         return () => clearTimeout(timer);
       }
     }
-  }, [currentPage, numPages, pdfDocument]);
+  }, [currentPage, numPages, pdfDocument, dimensionsReady]);
 
   // Setup page intersection observer to mount canvases dynamically (Caches Rendered Canvases)
   useEffect(() => {
