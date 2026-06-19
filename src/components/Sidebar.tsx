@@ -6,7 +6,7 @@ interface SidebarProps {
   toc: TocItem[];
   bookmarks: Bookmark[];
   history: HistoryEntry[];
-  onJumpToPage: (pageNumber: number) => void;
+  onJumpToPage: (pageNumber: number, tocItem?: TocItem) => void;
   activeTab: 'toc' | 'bookmarks' | 'history';
   setActiveTab: (tab: 'toc' | 'bookmarks' | 'history') => void;
   collapsed: boolean;
@@ -95,10 +95,40 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <li
                     key={index}
                     className={`toc-item level-${Math.min(3, item.level)}`}
-                    onClick={() => onJumpToPage(item.pageNumber)}
-                    title={`${item.title} (Page ${item.pageNumber})`}
+                    onClick={() => onJumpToPage(item.pageNumber, item)}
+                    title={item.isResolving ? `${item.title} (Resolving page...)` : `${item.title} (Page ${item.pageNumber})`}
+                    style={{
+                      cursor: 'pointer',
+                      opacity: item.isResolving ? 0.75 : 1
+                    }}
                   >
-                    {item.title}
+                    <span style={{ 
+                      overflow: 'hidden', 
+                      textOverflow: 'ellipsis', 
+                      whiteSpace: 'nowrap',
+                      display: 'inline-block',
+                      maxWidth: 'calc(100% - 40px)'
+                    }}>
+                      {item.title}
+                    </span>
+                    {item.isResolving ? (
+                      <span className="toc-resolving-spinner" style={{ 
+                        float: 'right', 
+                        fontSize: '0.7rem', 
+                        color: 'var(--text-muted)'
+                      }}>
+                        ...
+                      </span>
+                    ) : (
+                      <span style={{ 
+                        float: 'right', 
+                        fontSize: '0.75rem', 
+                        color: 'var(--text-muted)',
+                        marginLeft: '8px'
+                      }}>
+                        {item.pageNumber}
+                      </span>
+                    )}
                   </li>
                 ))}
               </ul>

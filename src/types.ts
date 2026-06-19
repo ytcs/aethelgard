@@ -43,6 +43,8 @@ export interface TocItem {
   title: string;
   pageNumber: number;
   level: number;
+  dest?: any;
+  isResolving?: boolean;
 }
 
 export type DrawingTool = 'select' | 'pencil' | 'highlighter' | 'eraser';

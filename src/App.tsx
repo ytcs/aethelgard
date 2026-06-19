@@ -58,6 +58,10 @@ export default function App() {
   // Document loading
   const [pdfFilename, setPdfFilename] = useState<string | null>(null);
   const [pdfDocument, setPdfDocument] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
+  const pdfDocumentRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null);
+  useEffect(() => {
+    pdfDocumentRef.current = pdfDocument;
+  }, [pdfDocument]);
   const [toc, setToc] = useState<TocItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -114,10 +118,11 @@ export default function App() {
           const loadingTask = pdfjsLib.getDocument({ data: cached.data });
           const doc = await loadingTask.promise;
           setPdfDocument(doc);
+          setLoading(false);
           showToast('Restored offline PDF document.');
 
-          const flatOutline = await extractToc(doc);
-          setToc(flatOutline);
+          // Extract outline progressively in the background without blocking the UI
+          extractToc(doc);
         }
       } catch (err: any) {
         console.error('Failed to restore cached PDF:', err);
@@ -217,10 +222,11 @@ export default function App() {
       const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
       const doc = await loadingTask.promise;
       setPdfDocument(doc);
+      setLoading(false);
       showToast('Document loaded and cached offline.');
 
-      const flatOutline = await extractToc(doc);
-      setToc(flatOutline);
+      // Extract outline progressively in the background without blocking the UI
+      extractToc(doc);
     } catch (err: any) {
       console.error('Failed to load selected PDF:', err);
       setError(`Failed to load PDF document: ${err.message || err.toString()}`);
@@ -246,45 +252,87 @@ export default function App() {
   };
 
   // Extract outline items recursively
-  const extractToc = async (pdf: pdfjsLib.PDFDocumentProxy): Promise<TocItem[]> => {
+  const extractToc = async (pdf: pdfjsLib.PDFDocumentProxy): Promise<void> => {
     try {
       const outline = await pdf.getOutline();
-      if (!outline) return [];
+      if (!outline) {
+        setToc([]);
+        return;
+      }
       
       const flatOutline: TocItem[] = [];
-      const traverse = async (items: any[], level: number) => {
+      const traverse = (items: any[], level: number) => {
         for (const item of items) {
-          let pageNumber = 1;
-          if (item.dest) {
-            try {
-              let dest = item.dest;
-              if (typeof dest === 'string') {
-                dest = await pdf.getDestination(dest);
-              }
-              if (Array.isArray(dest)) {
-                const destRef = dest[0];
-                const pageIdx = await pdf.getPageIndex(destRef);
-                pageNumber = pageIdx + 1;
-              }
-            } catch (err) {
-              console.error('Error resolving TOC dest:', err);
-            }
-          }
           flatOutline.push({
-            title: item.title,
-            pageNumber,
+            title: item.title || 'Untitled',
+            pageNumber: 1,
             level,
+            dest: item.dest,
+            isResolving: true,
           });
           if (item.items && item.items.length > 0) {
-            await traverse(item.items, level + 1);
+            traverse(item.items, level + 1);
           }
         }
       };
-      await traverse(outline, 1);
-      return flatOutline;
+      traverse(outline, 1);
+      
+      // Set initial outline immediately to let the sidebar populate
+      setToc(flatOutline);
+
+      // Now resolve page numbers progressively in the background
+      resolvePageNumbersProgressively(pdf, flatOutline);
     } catch (e) {
       console.error('Error loading outline:', e);
-      return [];
+      setToc([]);
+    }
+  };
+
+  const resolvePageNumbersProgressively = async (pdf: pdfjsLib.PDFDocumentProxy, items: TocItem[]) => {
+    const updatedItems = [...items];
+    const chunkSize = 20;
+    
+    for (let i = 0; i < updatedItems.length; i += chunkSize) {
+      // Check if document has changed or closed in the middle of resolving
+      if (pdfDocumentRef.current !== pdf) return;
+
+      const chunk = updatedItems.slice(i, i + chunkSize);
+      
+      await Promise.all(
+        chunk.map(async (item, index) => {
+          const itemIdx = i + index;
+          if (!item.dest) {
+            updatedItems[itemIdx] = { ...item, isResolving: false };
+            return;
+          }
+          try {
+            let dest = item.dest;
+            if (typeof dest === 'string') {
+              dest = await pdf.getDestination(dest);
+            }
+            if (Array.isArray(dest)) {
+              const destRef = dest[0];
+              const pageIdx = await pdf.getPageIndex(destRef);
+              updatedItems[itemIdx] = {
+                ...item,
+                pageNumber: pageIdx + 1,
+                isResolving: false
+              };
+            } else {
+              updatedItems[itemIdx] = { ...item, isResolving: false };
+            }
+          } catch (err) {
+            console.error('Error resolving TOC dest:', err);
+            updatedItems[itemIdx] = { ...item, isResolving: false };
+          }
+        })
+      );
+
+      // Update state for progressive loading
+      setToc([...updatedItems]);
+      
+      // Yield to the browser main thread
+      await new Promise(resolve => setTimeout(resolve, 0));
     }
   };
 
@@ -365,12 +413,41 @@ export default function App() {
   };
 
   // Jump from TOC or Bookmark clicks
-  const handleJumpToPage = (pageNumber: number) => {
+  const handleJumpToPage = async (pageNumber: number, tocItem?: TocItem) => {
+    let targetPage = pageNumber;
+    
+    // If TOC item is still resolving, resolve it on demand
+    if (tocItem && tocItem.isResolving && tocItem.dest && pdfDocument) {
+      setLoading(true);
+      try {
+        let dest = tocItem.dest;
+        if (typeof dest === 'string') {
+          dest = await pdfDocument.getDestination(dest);
+        }
+        if (Array.isArray(dest)) {
+          const destRef = dest[0];
+          const pageIdx = await pdfDocument.getPageIndex(destRef);
+          targetPage = pageIdx + 1;
+          
+          // Update the item in TOC so it shows page number and is marked resolved
+          setToc(prev => prev.map(item => 
+            item.title === tocItem.title && item.dest === tocItem.dest
+              ? { ...item, pageNumber: targetPage, isResolving: false }
+              : item
+          ));
+        }
+      } catch (err) {
+        console.error('Failed to resolve page number on demand:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
     // Jump left panel to target page
-    handlePageChange('left', pageNumber, 'toc');
+    handlePageChange('left', targetPage, 'toc');
     // If split pane, jump right panel to next page
     if (layoutMode === 'split' && !linkedScrolling) {
-      setRightPanel(prev => ({ ...prev, currentPage: Math.min(pdfDocument?.numPages || pageNumber, pageNumber + 1) }));
+      setRightPanel(prev => ({ ...prev, currentPage: Math.min(pdfDocument?.numPages || targetPage, targetPage + 1) }));
     }
   };
 
