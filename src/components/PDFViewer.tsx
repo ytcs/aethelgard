@@ -9,7 +9,9 @@ import {
   ZoomOut, 
   Bookmark, 
   BookmarkCheck,
-  FileText
+  FileText,
+  ArrowLeft,
+  ArrowRight
 } from 'lucide-react';
 
 interface PDFViewerProps {
@@ -30,6 +32,11 @@ interface PDFViewerProps {
   registerViewpoint: (pageNumber: number, reason: 'jump' | 'read' | 'toc' | 'annotated' | 'scroll') => void;
   onSwitchToWhiteboard: () => void;
   onFocusPanel: () => void;
+  // History navigation props
+  canGoBack: boolean;
+  canGoForward: boolean;
+  onGoBack: () => void;
+  onGoForward: () => void;
 }
 
 export const PDFViewer: React.FC<PDFViewerProps> = ({
@@ -50,6 +57,10 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
   registerViewpoint,
   onSwitchToWhiteboard,
   onFocusPanel,
+  canGoBack,
+  canGoForward,
+  onGoBack,
+  onGoForward,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -352,6 +363,28 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
         </div>
         
         <div className="panel-controls">
+          {/* View History Navigation */}
+          <button 
+            className="panel-btn" 
+            title="Go Back in History" 
+            onClick={onGoBack} 
+            disabled={!canGoBack}
+            style={{ opacity: canGoBack ? 1 : 0.3 }}
+          >
+            <ArrowLeft size={15} />
+          </button>
+          <button 
+            className="panel-btn" 
+            title="Go Forward in History" 
+            onClick={onGoForward} 
+            disabled={!canGoForward}
+            style={{ opacity: canGoForward ? 1 : 0.3 }}
+          >
+            <ArrowRight size={15} />
+          </button>
+
+          <div className="toolbar-divider" style={{ height: '16px' }}></div>
+
           {/* Zoom Actions */}
           <button className="panel-btn" title="Zoom Out" onClick={() => onZoomChange(Math.max(0.5, zoom - 0.15))}>
             <ZoomOut size={15} />

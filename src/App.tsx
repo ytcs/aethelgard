@@ -130,6 +130,68 @@ export default function App() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
 
+  // Back/Forward View History navigation per panel (scopable stack)
+  const [panelHistory, setPanelHistory] = useState<{
+    left: { stack: number[]; index: number };
+    right: { stack: number[]; index: number };
+  }>({
+    left: { stack: [1], index: 0 },
+    right: { stack: [1], index: 0 }
+  });
+
+  const addToPanelHistory = (panelId: 'left' | 'right', pageNumber: number) => {
+    setPanelHistory(prev => {
+      const { stack, index } = prev[panelId];
+      if (stack[index] === pageNumber) return prev;
+
+      // Slice stack to discard forward history
+      const newStack = stack.slice(0, index + 1);
+      newStack.push(pageNumber);
+      
+      const trimmedStack = newStack.slice(-50);
+      return {
+        ...prev,
+        [panelId]: { stack: trimmedStack, index: trimmedStack.length - 1 }
+      };
+    });
+  };
+
+  const navigatePanelHistory = (panelId: 'left' | 'right', direction: 'back' | 'forward') => {
+    setPanelHistory(prev => {
+      const { stack, index } = prev[panelId];
+      let newIndex = index;
+      if (direction === 'back' && index > 0) {
+        newIndex = index - 1;
+      } else if (direction === 'forward' && index < stack.length - 1) {
+        newIndex = index + 1;
+      }
+
+      if (newIndex !== index) {
+        const targetPage = stack[newIndex];
+        if (panelId === 'left') {
+          setLeftPanel(p => ({ ...p, currentPage: targetPage }));
+        } else {
+          setRightPanel(p => ({ ...p, currentPage: targetPage }));
+        }
+        return {
+          ...prev,
+          [panelId]: { stack, index: newIndex }
+        };
+      }
+      return prev;
+    });
+  };
+
+  // Initialize panel history stack when document is restored or loaded
+  useEffect(() => {
+    if (pdfDocument && isRestored) {
+      setPanelHistory({
+        left: { stack: [leftPanel.currentPage], index: 0 },
+        right: { stack: [rightPanel.currentPage], index: 0 }
+      });
+    }
+  }, [pdfDocument, isRestored]);
+
   // Bookmark naming modal
   const [bookmarkModalOpen, setBookmarkModalOpen] = useState(false);
   const [bookmarkModalPage, setBookmarkModalPage] = useState(1);
@@ -463,6 +525,19 @@ export default function App() {
         setLeftPanel(prev => ({ ...prev, currentPage: Math.max(1, pageNumber - 1) }));
       }
     }
+
+    // Add to back/forward navigation history if it's a jump, TOC click, or hyperlink click
+    if (reason === 'jump' || reason === 'toc' || reason === 'annotated') {
+      addToPanelHistory(panelId, pageNumber);
+      if (linkedScrolling) {
+        // In linked scrolling, the other panel also changes page, so log it too
+        const otherPanelId = panelId === 'left' ? 'right' : 'left';
+        const otherPage = panelId === 'left'
+          ? Math.min(pdfDocument?.numPages || pageNumber, pageNumber + 1)
+          : Math.max(1, pageNumber - 1);
+        addToPanelHistory(otherPanelId, otherPage);
+      }
+    }
   };
 
   // Jump from TOC or Bookmark clicks
@@ -500,7 +575,7 @@ export default function App() {
     handlePageChange('left', targetPage, 'toc');
     // If split pane, jump right panel to next page
     if (layoutMode === 'split' && !linkedScrolling) {
-      setRightPanel(prev => ({ ...prev, currentPage: Math.min(pdfDocument?.numPages || targetPage, targetPage + 1) }));
+      handlePageChange('right', Math.min(pdfDocument?.numPages || targetPage, targetPage + 1), 'toc');
     }
   };
 
@@ -867,6 +942,10 @@ export default function App() {
               registerViewpoint={(page, reason) => registerViewpoint(page, reason, 'left')}
               onSwitchToWhiteboard={() => setLeftPanel(prev => ({ ...prev, mode: 'whiteboard' }))}
               onFocusPanel={() => setFocusedPanel('left')}
+              canGoBack={panelHistory.left.index > 0}
+              canGoForward={panelHistory.left.index < panelHistory.left.stack.length - 1}
+              onGoBack={() => navigatePanelHistory('left', 'back')}
+              onGoForward={() => navigatePanelHistory('left', 'forward')}
             />
           ) : (
             <div className="viewer-panel" onClick={() => setFocusedPanel('left')}>
@@ -907,6 +986,10 @@ export default function App() {
                 registerViewpoint={(page, reason) => registerViewpoint(page, reason, 'right')}
                 onSwitchToWhiteboard={() => setRightPanel(prev => ({ ...prev, mode: 'whiteboard' }))}
                 onFocusPanel={() => setFocusedPanel('right')}
+                canGoBack={panelHistory.right.index > 0}
+                canGoForward={panelHistory.right.index < panelHistory.right.stack.length - 1}
+                onGoBack={() => navigatePanelHistory('right', 'back')}
+                onGoForward={() => navigatePanelHistory('right', 'forward')}
               />
             ) : (
               <div className="viewer-panel" onClick={() => setFocusedPanel('right')}>
