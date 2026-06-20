@@ -179,10 +179,16 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
     lastScrolledPageRef.current = currentPage;
   }, [pdfDocument]);
 
-  // Clear cache and trigger redraw of rendered pages when zoom factor or document changes
+  // Reset the rendered-page cache only when the document changes. We must NOT
+  // clear it on zoom: doing so unmounts every visible PDFPageRender, and the
+  // IntersectionObserver won't re-mount pages that are already intersecting
+  // (it only fires on intersection *changes*), leaving them blank until the
+  // user scrolls them out and back. PDFPageRender already re-renders its
+  // canvas at the new resolution when its `width` prop changes, so visible
+  // pages update in place on zoom with no need to unmount them.
   useEffect(() => {
     setRenderedPages({});
-  }, [zoom, pdfDocument]);
+  }, [pdfDocument]);
 
   // Scroll to active page when explicitly changed by external inputs or on initial mount
   useEffect(() => {

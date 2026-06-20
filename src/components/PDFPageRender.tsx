@@ -81,24 +81,33 @@ export const PDFPageRender: React.FC<PDFPageRenderProps> = ({
           if (isCancelled) return;
 
           if (annotations.length > 0) {
-            const linkService = {
-              navigateTo: async (dest: any) => {
-                try {
-                  let targetDest = dest;
-                  if (typeof dest === 'string') {
-                    targetDest = await pdfDocument.getDestination(dest);
-                  }
-                  if (Array.isArray(targetDest)) {
-                    const destRef = targetDest[0];
-                    const pageIdx = await pdfDocument.getPageIndex(destRef);
-                    const targetPage = pageIdx + 1;
-                    if (onJumpToPage) {
-                      onJumpToPage(targetPage);
-                    }
-                  }
-                } catch (err) {
-                  console.error('Error navigating to destination:', err);
+            // Resolve a PDF destination (named or explicit array) to a 1-based
+            // page number and jump to it. pdf.js 6 calls `goToDestination` on
+            // an internal link click (the old name was `navigateTo`).
+            const goToDestination = async (dest: any) => {
+              try {
+                let targetDest = dest;
+                if (typeof dest === 'string') {
+                  targetDest = await pdfDocument.getDestination(dest);
                 }
+                if (Array.isArray(targetDest)) {
+                  const destRef = targetDest[0];
+                  const pageIdx = await pdfDocument.getPageIndex(destRef);
+                  const targetPage = pageIdx + 1;
+                  if (onJumpToPage) {
+                    onJumpToPage(targetPage);
+                  }
+                }
+              } catch (err) {
+                console.error('Error navigating to destination:', err);
+              }
+            };
+
+            const linkService = {
+              goToDestination,
+              navigateTo: goToDestination, // legacy alias
+              goToPage: (pageNumber: number) => {
+                if (onJumpToPage && Number.isFinite(pageNumber)) onJumpToPage(pageNumber);
               },
               getDestinationHash: (_dest: any) => '#',
               getAnchorUrl: (_hash: any) => '#',

@@ -1,12 +1,13 @@
 import React from 'react';
 import type { TocItem, Bookmark, HistoryEntry } from '../types';
-import { BookOpen, BookmarkCheck, History, Trash2 } from 'lucide-react';
+import { BookOpen, BookmarkCheck, History, Trash2, X } from 'lucide-react';
 
 interface SidebarProps {
   toc: TocItem[];
   bookmarks: Bookmark[];
   history: HistoryEntry[];
   onJumpToPage: (pageNumber: number, tocItem?: TocItem) => void;
+  onDeleteBookmark: (id: string) => void;
   activeTab: 'toc' | 'bookmarks' | 'history';
   setActiveTab: (tab: 'toc' | 'bookmarks' | 'history') => void;
   collapsed: boolean;
@@ -18,6 +19,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   bookmarks,
   history,
   onJumpToPage,
+  onDeleteBookmark,
   activeTab,
   setActiveTab,
   collapsed,
@@ -153,8 +155,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       key={bookmark.id}
                       className="bookmark-item"
                       onClick={() => onJumpToPage(bookmark.pageNumber)}
+                      style={{ position: 'relative' }}
                     >
-                      <div className="bookmark-title">{bookmark.label}</div>
+                      <button
+                        className="bookmark-delete-btn"
+                        title="Delete bookmark"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteBookmark(bookmark.id);
+                        }}
+                      >
+                        <X size={13} />
+                      </button>
+                      <div className="bookmark-title" style={{ paddingRight: '22px' }}>{bookmark.label}</div>
                       <div className="bookmark-meta">
                         <span>Page {bookmark.pageNumber}</span>
                         <span>{formatTime(bookmark.timestamp)}</span>

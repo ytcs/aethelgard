@@ -32,7 +32,9 @@ import {
   ChevronRight,
   Library,
   Cloud,
-  CloudOff
+  CloudOff,
+  Maximize,
+  Minimize
 } from 'lucide-react';
 import type { Session } from '@supabase/supabase-js';
 
@@ -67,7 +69,7 @@ export default function App() {
   // UI & Layout defaults (Sidebar is collapsed by default for Zen focus)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [activeSidebarTab, setActiveSidebarTab] = useState<'toc' | 'bookmarks' | 'history'>('toc');
-  const [layoutMode, setLayoutMode] = useState<'single' | 'split'>('split');
+  const [layoutMode, setLayoutMode] = useState<'single' | 'split'>('single');
   const [linkedScrolling, setLinkedScrolling] = useState(false);
   const [globalZoom, setGlobalZoom] = useState(1.0);
   const [focusedPanel, setFocusedPanel] = useState<'left' | 'right'>('left');
@@ -92,6 +94,39 @@ export default function App() {
     return () => {
       window.removeEventListener('resize', handleFullscreenChange);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
+  // Toggle the browser Fullscreen API from the UI. (F11 window-fullscreen is
+  // still detected by the listener above, but can only be exited via F11.)
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.();
+    } else {
+      document.documentElement.requestFullscreen?.().catch((err) => {
+        console.warn('Fullscreen request failed:', err);
+      });
+    }
+  };
+
+  // Auto-hiding floating controls: reveal on pointer movement, fade out after a
+  // short idle period so the fullscreen toggle stays reachable when the header
+  // is hidden, without cluttering the reading surface.
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const controlsHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const reveal = () => {
+      setControlsVisible(true);
+      if (controlsHideTimer.current) clearTimeout(controlsHideTimer.current);
+      controlsHideTimer.current = setTimeout(() => setControlsVisible(false), 2500);
+    };
+    reveal(); // start the initial fade-out countdown
+    window.addEventListener('mousemove', reveal);
+    window.addEventListener('touchstart', reveal);
+    return () => {
+      if (controlsHideTimer.current) clearTimeout(controlsHideTimer.current);
+      window.removeEventListener('mousemove', reveal);
+      window.removeEventListener('touchstart', reveal);
     };
   }, []);
 
@@ -355,7 +390,7 @@ export default function App() {
       setLeftPanel({ id: 'left', mode: 'pdf', currentPage: 1 });
       setRightPanel({ id: 'right', mode: 'pdf', currentPage: 1 });
       setGlobalZoom(1.0);
-      setLayoutMode('split');
+      setLayoutMode('single');
       setLinkedScrolling(false);
     }
   };
@@ -748,6 +783,15 @@ export default function App() {
     }
   };
 
+  // Remove a bookmark directly from the list by its id.
+  const deleteBookmark = (id: string) => {
+    const target = bookmarks.find(b => b.id === id);
+    const updated = bookmarks.filter(b => b.id !== id);
+    setBookmarks(updated);
+    persist('bookmarks', updated);
+    showToast(target ? `Removed Bookmark: "${target.label}"` : 'Bookmark removed');
+  };
+
   const handleSaveBookmark = () => {
     if (!pdfFilename) return;
     const newBookmark: Bookmark = {
@@ -907,6 +951,16 @@ export default function App() {
       {/* Toast Notification */}
       {toastMessage && <div className="notification-toast">{toastMessage}</div>}
 
+      {/* Auto-hiding floating fullscreen toggle (lower-right) */}
+      <button
+        className={`fullscreen-fab ${controlsVisible ? '' : 'hidden'}`}
+        onClick={toggleFullscreen}
+        title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+        aria-label={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+      >
+        {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
+      </button>
+
       {/* Header */}
       <header className="app-header">
         <div className="logo-container">
@@ -969,7 +1023,7 @@ export default function App() {
           >
             <Square size={13} /> Single View
           </button>
-          <button 
+          <button
             className={`header-btn ${layoutMode === 'split' ? 'active' : ''}`}
             onClick={() => toggleLayoutMode('split')}
             title="Dual Split Pane Mode"
@@ -1040,6 +1094,7 @@ export default function App() {
           bookmarks={bookmarks}
           history={history}
           onJumpToPage={handleJumpToPage}
+          onDeleteBookmark={deleteBookmark}
           activeTab={activeSidebarTab}
           setActiveTab={setActiveSidebarTab}
           collapsed={sidebarCollapsed}
