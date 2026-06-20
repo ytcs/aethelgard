@@ -42,8 +42,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
-  if (collapsed) return null;
-
   return (
     <div className={`app-sidebar ${collapsed ? 'collapsed' : ''}`}>
       {/* Sidebar Tabs */}

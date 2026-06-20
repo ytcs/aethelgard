@@ -28,7 +28,9 @@ import {
   BookOpen,
   Trash2,
   X,
-  MousePointer
+  MousePointer,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 
 import { getPdfFromDb, savePdfToDb, clearPdfFromDb } from './utils/db';
@@ -750,14 +752,7 @@ export default function App() {
       {/* Header */}
       <header className="app-header">
         <div className="logo-container">
-          <button 
-            className="panel-btn" 
-            title="Toggle Sidebar" 
-            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-          >
-            <Menu size={18} />
-          </button>
-          <div className="logo-text">AETHELGARD</div>
+          <div className="logo-text" style={{ marginLeft: '10px' }}>AETHELGARD</div>
           <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', letterSpacing: '2px' }}>READER</span>
         </div>
 
@@ -860,6 +855,15 @@ export default function App() {
           collapsed={sidebarCollapsed}
           onClearHistory={handleClearHistory}
         />
+
+        {/* Floating Sidebar Toggle Nob */}
+        <button 
+          className={`sidebar-toggle-nob ${sidebarCollapsed ? 'collapsed' : ''}`}
+          onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+          title={sidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+        >
+          {sidebarCollapsed ? <ChevronRight size={12} /> : <ChevronLeft size={12} />}
+        </button>
 
         {/* Viewing workspace */}
         <div className="workspace-container">
