@@ -37,6 +37,7 @@ interface PDFViewerProps {
   canGoForward: boolean;
   onGoBack: () => void;
   onGoForward: () => void;
+  isFocused: boolean;
 }
 
 export const PDFViewer: React.FC<PDFViewerProps> = ({
@@ -61,6 +62,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
   canGoForward,
   onGoBack,
   onGoForward,
+  isFocused,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -137,12 +139,13 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
   useLayoutEffect(() => {
     if (!pdfDocument || !containerRef.current || !dimensionsReady) return;
     
-    // 1. Capture current scroll ratio before updating page sizes
+    // 1. Capture current scroll ratio centered around viewport center before updating page sizes
     const container = containerRef.current;
     if (isFirstDimensionsReadyRef.current) {
       isFirstDimensionsReadyRef.current = false;
     } else {
-      const ratio = container.scrollTop / container.scrollHeight;
+      const center = container.scrollTop + container.clientHeight / 2;
+      const ratio = center / container.scrollHeight;
       scrollRatioRef.current = ratio;
     }
 
@@ -158,7 +161,8 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
       const container = containerRef.current;
       isScrollingToPageRef.current = true;
       
-      container.scrollTop = scrollRatioRef.current * container.scrollHeight;
+      const newScrollTop = scrollRatioRef.current * container.scrollHeight - container.clientHeight / 2;
+      container.scrollTop = Math.max(0, newScrollTop);
       scrollRatioRef.current = null;
 
       if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
@@ -356,7 +360,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
   };
 
   return (
-    <div className="viewer-panel" onClick={onFocusPanel}>
+    <div className={`viewer-panel ${isFocused ? 'focused' : ''}`} onClick={onFocusPanel}>
       <div className="panel-header">
         <div className="panel-title">
           <span>Panel {panelId === 'left' ? 'A' : 'B'} — Page {currentPage} of {numPages}</span>
@@ -383,8 +387,6 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
             <ArrowRight size={15} />
           </button>
 
-          <div className="toolbar-divider" style={{ height: '16px' }}></div>
-
           {/* Zoom Actions */}
           <button className="panel-btn" title="Zoom Out" onClick={() => onZoomChange(Math.max(0.5, zoom - 0.15))}>
             <ZoomOut size={15} />
@@ -395,8 +397,6 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
           <button className="panel-btn" title="Zoom In" onClick={() => onZoomChange(Math.min(3.0, zoom + 0.15))}>
             <ZoomIn size={15} />
           </button>
-          
-          <div className="toolbar-divider" style={{ height: '16px' }}></div>
           
           {/* Page Jumper */}
           <div className="page-nav-container">
@@ -433,8 +433,6 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
             </button>
           </div>
           
-          <div className="toolbar-divider" style={{ height: '16px' }}></div>
-
           {/* Bookmarking */}
           <button 
             className="panel-btn" 
@@ -445,8 +443,6 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
             {isBookmarked ? <BookmarkCheck size={15} /> : <Bookmark size={15} />}
           </button>
 
-          <div className="toolbar-divider" style={{ height: '16px' }}></div>
-          
           {/* Whiteboard trigger */}
           <button
             className="panel-btn"

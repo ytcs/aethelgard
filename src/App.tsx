@@ -14,9 +14,8 @@ import type {
 import { Sidebar } from './components/Sidebar';
 import { PDFViewer } from './components/PDFViewer';
 import { Whiteboard } from './components/Whiteboard';
-import { 
-  Menu, 
-  Columns, 
+import {
+  Columns,
   Square, 
   Link as LinkIcon, 
   Link2Off, 
@@ -30,10 +29,26 @@ import {
   X,
   MousePointer,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Library,
+  Cloud,
+  CloudOff
 } from 'lucide-react';
+import type { Session } from '@supabase/supabase-js';
 
 import { getPdfFromDb, savePdfToDb, clearPdfFromDb } from './utils/db';
+import { LIBRARY, type LibraryBook } from './library';
+import { isCloudConfigured } from './lib/supabase';
+import {
+  type AnnotationKind,
+  getSession,
+  onAuthChange,
+  signInWithGoogle,
+  signOut,
+  isOwner as checkIsOwner,
+  pullBook,
+  pushAnnotation,
+} from './lib/cloud';
 import 'pdfjs-dist/web/pdf_viewer.css';
 
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
@@ -80,13 +95,90 @@ export default function App() {
     };
   }, []);
 
+  // Keyboard Hotkeys listener (Tab to toggle sidebar, Left/Right Arrows for history, Tilde to toggle split view)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeEl = document.activeElement;
+      const isInput = activeEl && (
+        activeEl.tagName === 'INPUT' || 
+        activeEl.tagName === 'TEXTAREA' ||
+        (activeEl as HTMLElement).isContentEditable
+      );
+      if (isInput) return;
+
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        setSidebarCollapsed(prev => !prev);
+      }
+
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        navigatePanelHistory(focusedPanel, 'back');
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        navigatePanelHistory(focusedPanel, 'forward');
+      }
+
+      if (e.key === '~' || e.key === '`') {
+        e.preventDefault();
+        setLayoutMode(prev => prev === 'split' ? 'single' : 'split');
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [focusedPanel]);
+
   // Document loading
   const [pdfFilename, setPdfFilename] = useState<string | null>(null);
+  // Stable cross-device key for annotations (library slug, or 'upload:<name>').
+  const [bookId, setBookId] = useState<string | null>(null);
   const [pdfDocument, setPdfDocument] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
   const pdfDocumentRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null);
   useEffect(() => {
     pdfDocumentRef.current = pdfDocument;
   }, [pdfDocument]);
+
+  // --- Auth & cloud sync ---------------------------------------------------
+  const [session, setSession] = useState<Session | null>(null);
+  const isOwner = checkIsOwner(session);
+
+  // Mirror auth + book identity into refs so persistence callbacks (which run
+  // outside React's render cycle) always read the current value.
+  const sessionRef = useRef<Session | null>(null);
+  const isOwnerRef = useRef(false);
+  const bookIdRef = useRef<string | null>(null);
+  useEffect(() => { sessionRef.current = session; isOwnerRef.current = isOwner; }, [session, isOwner]);
+  useEffect(() => { bookIdRef.current = bookId; }, [bookId]);
+
+  // Establish the session on mount and keep it in sync with auth changes.
+  useEffect(() => {
+    let mounted = true;
+    getSession().then((s) => { if (mounted) setSession(s); });
+    const unsub = onAuthChange((s) => setSession(s));
+    return () => { mounted = false; unsub(); };
+  }, []);
+
+  // Debounced cloud-push timers, one per annotation kind.
+  const pushTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  // Write an annotation kind to the local cache immediately, and (if the owner
+  // is signed in) debounce-push it to Supabase. This is the single place that
+  // owns persistence for bookmarks/drawings/history/session.
+  const persist = (kind: AnnotationKind, data: unknown) => {
+    const bid = bookIdRef.current;
+    if (!bid) return;
+    localStorage.setItem(`aethelgard_${kind}_${bid}`, JSON.stringify(data));
+    if (isOwnerRef.current && sessionRef.current) {
+      const uid = sessionRef.current.user.id;
+      clearTimeout(pushTimers.current[kind]);
+      pushTimers.current[kind] = setTimeout(() => {
+        void pushAnnotation(uid, bid, kind, data);
+      }, 600);
+    }
+  };
 
   // Dynamically resolve page/tab title based on loaded PDF metadata or filename
   useEffect(() => {
@@ -99,8 +191,9 @@ export default function App() {
       let docTitle = pdfFilename || 'Aethelgard';
       try {
         const meta = await pdfDocument.getMetadata();
-        if (meta?.info?.Title && meta.info.Title.trim() !== '') {
-          docTitle = meta.info.Title.trim();
+        const info = meta?.info as { Title?: string } | undefined;
+        if (info?.Title && info.Title.trim() !== '') {
+          docTitle = info.Title.trim();
         }
       } catch (err) {
         console.warn('Failed to retrieve PDF metadata title:', err);
@@ -225,6 +318,7 @@ export default function App() {
       try {
         const cached = await getPdfFromDb();
         if (cached) {
+          setBookId(cached.bookId);
           setPdfFilename(cached.filename);
           setLoading(true);
           const loadingTask = pdfjsLib.getDocument({ data: cached.data });
@@ -246,56 +340,16 @@ export default function App() {
     loadCachedPdf();
   }, []);
 
-  // Restore persistence registries when pdfFilename is loaded or changes
-  useEffect(() => {
-    setIsRestored(false); // Halt session saving until restoration is applied
-
-    if (!pdfFilename) {
-      setDrawingsRegistry({});
-      setBookmarks([]);
-      setHistory([]);
-      return;
-    }
-
-    const savedDrawings = localStorage.getItem(`aethelgard_drawings_${pdfFilename}`);
-    const savedBookmarks = localStorage.getItem(`aethelgard_bookmarks_${pdfFilename}`);
-    const savedHistory = localStorage.getItem(`aethelgard_history_${pdfFilename}`);
-    
-    if (savedDrawings) {
-      try { setDrawingsRegistry(JSON.parse(savedDrawings)); } catch(e) { setDrawingsRegistry({}); }
-    } else {
-      setDrawingsRegistry({});
-    }
-    if (savedBookmarks) {
-      try { setBookmarks(JSON.parse(savedBookmarks)); } catch(e) { setBookmarks([]); }
-    } else {
-      setBookmarks([]);
-    }
-    if (savedHistory) {
-      try { setHistory(JSON.parse(savedHistory)); } catch(e) { setHistory([]); }
-    } else {
-      setHistory([]);
-    }
-
-    // Reset tracking refs for scroll logging
-    lastLogPage.current = { left: 1, right: 1 };
-    lastLogTime.current = 0;
-
-    // Restore reader session positions specific to this document
-    const savedSession = localStorage.getItem(`aethelgard_session_${pdfFilename}`);
-    if (savedSession) {
-      try {
-        const session = JSON.parse(savedSession);
-        if (session.layoutMode) setLayoutMode(session.layoutMode);
-        if (session.linkedScrolling !== undefined) setLinkedScrolling(session.linkedScrolling);
-        if (session.globalZoom) setGlobalZoom(session.globalZoom);
-        if (session.leftPage) setLeftPanel(prev => ({ ...prev, currentPage: session.leftPage }));
-        if (session.rightPage) setRightPanel(prev => ({ ...prev, currentPage: session.rightPage }));
-        if (session.sidebarCollapsed !== undefined) setSidebarCollapsed(session.sidebarCollapsed);
-        if (session.activeSidebarTab) setActiveSidebarTab(session.activeSidebarTab);
-      } catch (e) {
-        console.error('Failed to load saved reader session', e);
-      }
+  // Apply a saved reader session (page positions, zoom, layout) to UI state.
+  const applySession = (s: any) => {
+    if (s && typeof s === 'object') {
+      if (s.layoutMode) setLayoutMode(s.layoutMode);
+      if (s.linkedScrolling !== undefined) setLinkedScrolling(s.linkedScrolling);
+      if (s.globalZoom) setGlobalZoom(s.globalZoom);
+      if (s.leftPage) setLeftPanel(prev => ({ ...prev, currentPage: s.leftPage }));
+      if (s.rightPage) setRightPanel(prev => ({ ...prev, currentPage: s.rightPage }));
+      if (s.sidebarCollapsed !== undefined) setSidebarCollapsed(s.sidebarCollapsed);
+      if (s.activeSidebarTab) setActiveSidebarTab(s.activeSidebarTab);
     } else {
       // Default values for a new book
       setLeftPanel({ id: 'left', mode: 'pdf', currentPage: 1 });
@@ -304,14 +358,84 @@ export default function App() {
       setLayoutMode('split');
       setLinkedScrolling(false);
     }
+  };
 
-    setIsRestored(true); // Allow saving now that the state has been restored
-  }, [pdfFilename]);
-
-  // Save session state to localStorage keyed by active PDF filename
+  // Restore persistence registries when the active book changes. Loads the
+  // local cache immediately, then reconciles with the cloud (public read), and
+  // — for the owner on first sync — pushes any local-only data up to the cloud.
   useEffect(() => {
-    if (!pdfDocument || !pdfFilename || !isRestored) return; // Prevent overwriting during initialization
-    const session = {
+    setIsRestored(false); // Halt session saving until restoration is applied
+
+    if (!bookId) {
+      setDrawingsRegistry({});
+      setBookmarks([]);
+      setHistory([]);
+      return;
+    }
+
+    const readLocal = <T,>(kind: AnnotationKind, fallback: T): T => {
+      const raw = localStorage.getItem(`aethelgard_${kind}_${bookId}`);
+      if (!raw) return fallback;
+      try { return JSON.parse(raw) as T; } catch { return fallback; }
+    };
+
+    const localDrawings = readLocal<PageDrawingsRegistry>('drawings', {});
+    const localBookmarks = readLocal<Bookmark[]>('bookmarks', []);
+    const localHistory = readLocal<HistoryEntry[]>('history', []);
+    const localSession = readLocal<any>('session', null);
+
+    setDrawingsRegistry(localDrawings);
+    setBookmarks(localBookmarks);
+    setHistory(localHistory);
+
+    // Reset tracking refs for scroll logging
+    lastLogPage.current = { left: 1, right: 1 };
+    lastLogTime.current = 0;
+
+    applySession(localSession);
+    setIsRestored(true); // Allow saving now that the local state has been restored
+
+    // Reconcile with the cloud in the background.
+    let cancelled = false;
+    (async () => {
+      const cloud = await pullBook(bookId);
+      if (cancelled || bookIdRef.current !== bookId || !cloud) return;
+
+      if (cloud.drawings) {
+        setDrawingsRegistry(cloud.drawings as PageDrawingsRegistry);
+        localStorage.setItem(`aethelgard_drawings_${bookId}`, JSON.stringify(cloud.drawings));
+      }
+      if (cloud.bookmarks) {
+        setBookmarks(cloud.bookmarks as Bookmark[]);
+        localStorage.setItem(`aethelgard_bookmarks_${bookId}`, JSON.stringify(cloud.bookmarks));
+      }
+      if (cloud.history) {
+        setHistory(cloud.history as HistoryEntry[]);
+        localStorage.setItem(`aethelgard_history_${bookId}`, JSON.stringify(cloud.history));
+      }
+      if (cloud.session) {
+        applySession(cloud.session);
+        localStorage.setItem(`aethelgard_session_${bookId}`, JSON.stringify(cloud.session));
+      }
+
+      // First-sync migration: owner has local data the cloud doesn't yet hold.
+      if (isOwnerRef.current && sessionRef.current) {
+        const uid = sessionRef.current.user.id;
+        if (!cloud.drawings && Object.keys(localDrawings).length) void pushAnnotation(uid, bookId, 'drawings', localDrawings);
+        if (!cloud.bookmarks && localBookmarks.length) void pushAnnotation(uid, bookId, 'bookmarks', localBookmarks);
+        if (!cloud.history && localHistory.length) void pushAnnotation(uid, bookId, 'history', localHistory);
+        if (!cloud.session && localSession) void pushAnnotation(uid, bookId, 'session', localSession);
+      }
+    })();
+
+    return () => { cancelled = true; };
+    // Re-runs on sign-in/out so the owner's data migrates and syncs.
+  }, [bookId, session]);
+
+  // Save session state (page positions, zoom, layout) for the active book.
+  useEffect(() => {
+    if (!pdfDocument || !bookId || !isRestored) return; // Prevent overwriting during initialization
+    persist('session', {
       layoutMode,
       linkedScrolling,
       globalZoom,
@@ -319,9 +443,8 @@ export default function App() {
       rightPage: rightPanel.currentPage,
       sidebarCollapsed,
       activeSidebarTab,
-    };
-    localStorage.setItem(`aethelgard_session_${pdfFilename}`, JSON.stringify(session));
-  }, [pdfFilename, layoutMode, linkedScrolling, globalZoom, leftPanel.currentPage, rightPanel.currentPage, sidebarCollapsed, activeSidebarTab, pdfDocument, isRestored]);
+    });
+  }, [bookId, layoutMode, linkedScrolling, globalZoom, leftPanel.currentPage, rightPanel.currentPage, sidebarCollapsed, activeSidebarTab, pdfDocument, isRestored]);
 
   const loadFile = async (file: File) => {
     setLoading(true);
@@ -331,8 +454,12 @@ export default function App() {
 
     try {
       const arrayBuffer = await file.arrayBuffer();
+      // Uploaded files sync under an 'upload:'-prefixed id so they never
+      // collide with built-in library slugs.
+      const uploadId = `upload:${file.name}`;
       // Cache binary in IndexedDB
-      await savePdfToDb(file.name, arrayBuffer);
+      await savePdfToDb(uploadId, file.name, arrayBuffer);
+      setBookId(uploadId);
       setPdfFilename(file.name);
 
       const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
@@ -351,6 +478,35 @@ export default function App() {
     }
   };
 
+  // Open a book from the built-in library: fetch its static PDF, cache it
+  // offline, and key annotations by the book's stable slug.
+  const openBook = async (book: LibraryBook) => {
+    setLoading(true);
+    setError(null);
+    setPdfDocument(null);
+    setToc([]);
+
+    try {
+      const resp = await fetch(import.meta.env.BASE_URL + book.file);
+      if (!resp.ok) throw new Error(`Could not fetch "${book.title}" (HTTP ${resp.status})`);
+      const arrayBuffer = await resp.arrayBuffer();
+      await savePdfToDb(book.id, book.title, arrayBuffer);
+      setBookId(book.id);
+      setPdfFilename(book.title);
+
+      const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      setPdfDocument(doc);
+      setLoading(false);
+      showToast(`Opened "${book.title}".`);
+      extractToc(doc);
+    } catch (err: any) {
+      console.error('Failed to open library book:', err);
+      setError(`Failed to open book: ${err.message || err.toString()}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const closeDocument = async () => {
     if (window.confirm('Close this document? All your annotations and history will remain saved.')) {
       setLoading(true);
@@ -358,6 +514,7 @@ export default function App() {
         await clearPdfFromDb();
         setPdfDocument(null);
         setPdfFilename(null);
+        setBookId(null);
         setError(null);
         setIsRestored(false);
       } catch (err) {
@@ -502,9 +659,7 @@ export default function App() {
         item => !(item.pageNumber === pageNumber && item.reason === newEntry.reason && now - item.timestamp < 10000)
       );
       const updated = [newEntry, ...filtered].slice(0, 30);
-      if (pdfFilename) {
-        localStorage.setItem(`aethelgard_history_${pdfFilename}`, JSON.stringify(updated));
-      }
+      persist('history', updated);
       return updated;
     });
 
@@ -573,12 +728,8 @@ export default function App() {
       }
     }
 
-    // Jump left panel to target page
-    handlePageChange('left', targetPage, 'toc');
-    // If split pane, jump right panel to next page
-    if (layoutMode === 'split' && !linkedScrolling) {
-      handlePageChange('right', Math.min(pdfDocument?.numPages || targetPage, targetPage + 1), 'toc');
-    }
+    // Jump the focused panel to target page
+    handlePageChange(focusedPanel, targetPage, 'toc');
   };
 
   // Manage Bookmarks
@@ -588,7 +739,7 @@ export default function App() {
     if (existing) {
       const updated = bookmarks.filter(b => b.pageNumber !== pageNumber);
       setBookmarks(updated);
-      localStorage.setItem(`aethelgard_bookmarks_${pdfFilename}`, JSON.stringify(updated));
+      persist('bookmarks', updated);
       showToast(`Removed Bookmark for Page ${pageNumber}`);
     } else {
       setBookmarkModalPage(pageNumber);
@@ -607,7 +758,7 @@ export default function App() {
     };
     const updated = [...bookmarks, newBookmark];
     setBookmarks(updated);
-    localStorage.setItem(`aethelgard_bookmarks_${pdfFilename}`, JSON.stringify(updated));
+    persist('bookmarks', updated);
     setBookmarkModalOpen(false);
     showToast(`Added Bookmark: "${newBookmark.label}"`);
   };
@@ -620,7 +771,7 @@ export default function App() {
       [pageNumber]: strokes,
     };
     setDrawingsRegistry(updated);
-    localStorage.setItem(`aethelgard_drawings_${pdfFilename}`, JSON.stringify(updated));
+    persist('drawings', updated);
   };
 
   // Clear drawings on currently focused panel's active page
@@ -644,7 +795,7 @@ export default function App() {
   const handleClearHistory = () => {
     if (window.confirm('Clear all reading history?')) {
       setHistory([]);
-      localStorage.removeItem('aethelgard_history');
+      persist('history', []);
       showToast('History cleared.');
     }
   };
@@ -680,17 +831,17 @@ export default function App() {
     reader.onload = (event) => {
       try {
         const data = JSON.parse(event.target?.result as string);
-        if (data.drawings && pdfFilename) {
+        if (data.drawings && bookId) {
           setDrawingsRegistry(data.drawings);
-          localStorage.setItem(`aethelgard_drawings_${pdfFilename}`, JSON.stringify(data.drawings));
+          persist('drawings', data.drawings);
         }
-        if (data.bookmarks && pdfFilename) {
+        if (data.bookmarks && bookId) {
           setBookmarks(data.bookmarks);
-          localStorage.setItem(`aethelgard_bookmarks_${pdfFilename}`, JSON.stringify(data.bookmarks));
+          persist('bookmarks', data.bookmarks);
         }
-        if (data.history && pdfFilename) {
+        if (data.history && bookId) {
           setHistory(data.history);
-          localStorage.setItem(`aethelgard_history_${pdfFilename}`, JSON.stringify(data.history));
+          persist('history', data.history);
         }
         if (data.scratchpad) {
           localStorage.setItem('aethelgard_scratchpad_strokes', JSON.stringify(data.scratchpad));
@@ -736,10 +887,17 @@ export default function App() {
 
   if (!pdfDocument) {
     return (
-      <WelcomeScreen 
-        onFileSelect={loadFile} 
-        error={error} 
+      <WelcomeScreen
+        onFileSelect={loadFile}
+        onOpenBook={openBook}
+        library={LIBRARY}
+        error={error}
         loading={loading}
+        cloudConfigured={isCloudConfigured}
+        session={session}
+        isOwner={isOwner}
+        onSignIn={signInWithGoogle}
+        onSignOut={signOut}
       />
     );
   }
@@ -794,10 +952,17 @@ export default function App() {
             </div>
           )}
 
-          <div className="toolbar-divider"></div>
+          {/* Library */}
+          <button
+            className="header-btn"
+            onClick={() => setPdfDocument(null)}
+            title="Back to library"
+          >
+            <Library size={13} /> Library
+          </button>
 
           {/* Layout togglers */}
-          <button 
+          <button
             className={`header-btn ${layoutMode === 'single' ? 'active' : ''}`}
             onClick={() => toggleLayoutMode('single')}
             title="Single Pane Mode"
@@ -812,8 +977,6 @@ export default function App() {
             <Columns size={13} /> Split View
           </button>
 
-          <div className="toolbar-divider"></div>
-
           {/* Sync mode toggler */}
           <button 
             className={`header-btn ${linkedScrolling ? 'active' : ''}`}
@@ -824,21 +987,48 @@ export default function App() {
             {linkedScrolling ? 'Pages Linked' : 'Pages Unlinked'}
           </button>
 
-          <div className="toolbar-divider"></div>
-
           {/* Data backups */}
           <button className="header-btn" title="Export scribbles & bookmarks" onClick={exportData}>
             <Download size={13} /> Export Backup
           </button>
           <label className="header-btn" title="Import backups" style={{ cursor: 'pointer' }}>
             <Upload size={13} /> Import Backup
-            <input 
-              type="file" 
-              accept=".json" 
-              onChange={importData} 
-              style={{ display: 'none' }} 
+            <input
+              type="file"
+              accept=".json"
+              onChange={importData}
+              style={{ display: 'none' }}
             />
           </label>
+
+          {/* Auth / cloud sync */}
+          {isCloudConfigured && (
+            isOwner ? (
+              <button
+                className="header-btn active"
+                onClick={() => signOut()}
+                title={`Synced as ${session?.user.email} — click to sign out`}
+              >
+                <Cloud size={13} /> Synced
+              </button>
+            ) : session ? (
+              <button
+                className="header-btn"
+                onClick={() => signOut()}
+                title={`Signed in as ${session.user.email} (read-only) — click to sign out`}
+              >
+                <CloudOff size={13} /> Read-only
+              </button>
+            ) : (
+              <button
+                className="header-btn"
+                onClick={() => signInWithGoogle()}
+                title="Sign in with Google to sync your bookmarks & scribbles"
+              >
+                <CloudOff size={13} /> Sign in to sync
+              </button>
+            )
+          )}
         </div>
       </header>
 
@@ -950,9 +1140,10 @@ export default function App() {
               canGoForward={panelHistory.left.index < panelHistory.left.stack.length - 1}
               onGoBack={() => navigatePanelHistory('left', 'back')}
               onGoForward={() => navigatePanelHistory('left', 'forward')}
+              isFocused={focusedPanel === 'left'}
             />
           ) : (
-            <div className="viewer-panel" onClick={() => setFocusedPanel('left')}>
+            <div className={`viewer-panel ${focusedPanel === 'left' ? 'focused' : ''}`} onClick={() => setFocusedPanel('left')}>
               <Whiteboard
                 tool={activeTool}
                 color={activeColor}
@@ -994,9 +1185,10 @@ export default function App() {
                 canGoForward={panelHistory.right.index < panelHistory.right.stack.length - 1}
                 onGoBack={() => navigatePanelHistory('right', 'back')}
                 onGoForward={() => navigatePanelHistory('right', 'forward')}
+                isFocused={focusedPanel === 'right'}
               />
             ) : (
-              <div className="viewer-panel" onClick={() => setFocusedPanel('right')}>
+              <div className={`viewer-panel ${focusedPanel === 'right' ? 'focused' : ''}`} onClick={() => setFocusedPanel('right')}>
                 <Whiteboard
                   tool={activeTool}
                   color={activeColor}
@@ -1147,11 +1339,29 @@ export default function App() {
 
 interface WelcomeScreenProps {
   onFileSelect: (file: File) => void;
+  onOpenBook: (book: LibraryBook) => void;
+  library: LibraryBook[];
   error: string | null;
   loading: boolean;
+  cloudConfigured: boolean;
+  session: Session | null;
+  isOwner: boolean;
+  onSignIn: () => void;
+  onSignOut: () => void;
 }
 
-const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFileSelect, error, loading }) => {
+const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
+  onFileSelect,
+  onOpenBook,
+  library,
+  error,
+  loading,
+  cloudConfigured,
+  session,
+  isOwner,
+  onSignIn,
+  onSignOut,
+}) => {
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -1240,10 +1450,101 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFileSelect, error, load
           color: 'var(--text-secondary)',
           letterSpacing: '3px',
           textTransform: 'uppercase',
-          marginBottom: '32px',
+          marginBottom: '28px',
         }}>
-          Minimalist Offline Reader
+          Minimalist Reader
         </div>
+
+        {/* Library */}
+        {library.length > 0 && (
+          <div style={{ width: '100%', marginBottom: '28px', textAlign: 'left' }}>
+            <div style={{
+              fontSize: '0.7rem',
+              color: 'var(--text-muted)',
+              letterSpacing: '2px',
+              textTransform: 'uppercase',
+              marginBottom: '10px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}>
+              <Library size={13} style={{ color: 'var(--accent-primary)' }} /> Library
+            </div>
+            {library.map((book) => (
+              <button
+                key={book.id}
+                onClick={() => onOpenBook(book)}
+                disabled={loading}
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  background: 'rgba(133, 150, 129, 0.05)',
+                  border: '1px solid var(--border-light)',
+                  borderRadius: '8px',
+                  padding: '12px 14px',
+                  marginBottom: '8px',
+                  cursor: loading ? 'default' : 'pointer',
+                  color: 'var(--text-primary)',
+                  textAlign: 'left',
+                  transition: 'border-color 0.2s, background 0.2s',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--accent-primary)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--border-light)'; }}
+              >
+                <BookOpen size={16} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
+                <span style={{ display: 'flex', flexDirection: 'column' }}>
+                  <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{book.title}</span>
+                  {book.author && (
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{book.author}</span>
+                  )}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Cloud sync status */}
+        {cloudConfigured && (
+          <div style={{
+            width: '100%',
+            marginBottom: '24px',
+            padding: '10px 14px',
+            borderRadius: '8px',
+            background: 'rgba(133, 150, 129, 0.05)',
+            border: '1px solid var(--border-light)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '10px',
+            fontSize: '0.78rem',
+          }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-secondary)' }}>
+              {isOwner
+                ? <><Cloud size={14} style={{ color: 'var(--accent-primary)' }} /> Synced as {session?.user.email}</>
+                : session
+                  ? <><CloudOff size={14} /> Signed in (read-only)</>
+                  : <><CloudOff size={14} /> Not signed in — bookmarks are read-only</>}
+            </span>
+            <button
+              onClick={session ? onSignOut : onSignIn}
+              style={{
+                background: 'transparent',
+                border: '1px solid var(--border-light)',
+                borderRadius: '6px',
+                color: 'var(--text-primary)',
+                padding: '5px 12px',
+                fontSize: '0.72rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {session ? 'Sign out' : 'Sign in with Google'}
+            </button>
+          </div>
+        )}
 
         <div style={{
           width: '72px',
@@ -1266,7 +1567,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFileSelect, error, load
           marginBottom: '8px',
           fontWeight: 500,
         }}>
-          Drag and drop a PDF file here
+          Or drag and drop your own PDF
         </p>
         <p style={{
           fontSize: '0.8rem',
