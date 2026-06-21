@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState } from 'react';
 import type { MouseEvent, TouchEvent } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import type { Stroke, Point, DrawingTool, DrawingColor, BrushSize } from '../types';
-import { dlog } from '../debug';
+import { dlog, DEBUG_ENABLED } from '../debug';
 
 interface PDFPageRenderProps {
   pdfDocument: pdfjsLib.PDFDocumentProxy;
@@ -87,13 +87,16 @@ export const PDFPageRender: React.FC<PDFPageRenderProps> = ({
 
         // Sample a center pixel to detect the iOS "blank canvas" failure mode,
         // where render() resolves successfully but the backing store is empty.
-        try {
-          const cx = Math.floor(canvas.width / 2);
-          const cy = Math.floor(canvas.height / 2);
-          const px = ctx.getImageData(cx, cy, 1, 1).data;
-          dlog(`p${pageNumber} render OK; center px=[${px[0]},${px[1]},${px[2]},${px[3]}]`);
-        } catch (sampleErr: any) {
-          dlog(`p${pageNumber} render OK; getImageData failed: ${sampleErr?.message}`);
+        // getImageData forces a GPU→CPU readback, so only do it when diagnosing.
+        if (DEBUG_ENABLED) {
+          try {
+            const cx = Math.floor(canvas.width / 2);
+            const cy = Math.floor(canvas.height / 2);
+            const px = ctx.getImageData(cx, cy, 1, 1).data;
+            dlog(`p${pageNumber} render OK; center px=[${px[0]},${px[1]},${px[2]},${px[3]}]`);
+          } catch (sampleErr: any) {
+            dlog(`p${pageNumber} render OK; getImageData failed: ${sampleErr?.message}`);
+          }
         }
 
         // Render annotation layer for links/hyperlinks

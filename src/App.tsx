@@ -62,6 +62,26 @@ import { dlog, installGlobalErrorCapture } from './debug';
 installGlobalErrorCapture();
 dlog(`pdfjs v${(pdfjsLib as any).version} workerSrc=${pdfWorker}`);
 
+// Older iOS WebKit (< 16) rejects pdf.js's synthesized OTF fonts via the
+// browser FontFace API and silently substitutes a mis-kerned system font, so
+// there we must draw glyph outlines as canvas paths instead. That path-glyph
+// mode is markedly slower to render, and modern WebKit handles the synthesized
+// fonts correctly — so we only pay the cost on the old versions that need it.
+// Non-WebKit engines (Blink/Gecko) always take the fast native-font path.
+const NEEDS_PATH_GLYPHS = (() => {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent;
+  const isIOS =
+    /iP(hone|ad|od)/.test(ua) ||
+    // iPadOS 13+ masquerades as desktop Safari; detect it by touch support.
+    (/Macintosh/.test(ua) && typeof document !== 'undefined' && 'ontouchend' in document);
+  if (!isIOS) return false;
+  const m = ua.match(/OS (\d+)_/) || ua.match(/Version\/(\d+)/);
+  const major = m ? parseInt(m[1], 10) : 0;
+  // major === 0 means we couldn't read a version; assume modern (fast path).
+  return major > 0 && major < 16;
+})();
+
 // Tell pdf.js where to fetch its cMap and standard-font data (copied into the
 // build by scripts/copy-pdf-assets.mjs). Required for PDFs whose fonts aren't
 // embedded — without these pdf.js substitutes platform fonts, which render
@@ -81,9 +101,9 @@ const PDF_DOC_OPTS = {
   iccUrl: import.meta.env.BASE_URL + 'iccs/',
   // Use the document's embedded fonts, never the local system's.
   useSystemFonts: false,
-  // Draw glyphs as canvas paths rather than via the browser FontFace API, which
-  // WebKit/iOS can reject for pdf.js's synthesized OTF fonts. Engine-independent.
-  disableFontFace: true,
+  // Path-glyph rendering is engine-independent but slow; only enable it on the
+  // old WebKit versions that actually need it (see NEEDS_PATH_GLYPHS above).
+  disableFontFace: NEEDS_PATH_GLYPHS,
 };
 
 // Nordic Minimalism Palette - Muted earth tones gentle on the eyes
@@ -310,7 +330,8 @@ export default function App() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
 
-  // Back/Forward View History navigation per panel (scopable stack)
+  // Back/Forward View History navigation per panel (browser-style stack).
+  // stack[index] is the panel's current anchor; Back/Forward move the index.
   const [panelHistory, setPanelHistory] = useState<{
     left: { stack: number[]; index: number };
     right: { stack: number[]; index: number };
@@ -319,20 +340,26 @@ export default function App() {
     right: { stack: [1], index: 0 }
   });
 
-  const addToPanelHistory = (panelId: 'left' | 'right', pageNumber: number) => {
+  // Live current page per panel, updated on EVERY page change (including plain
+  // scrolling). This is what lets a jump capture the exact spot we departed
+  // from — the page reached by scrolling — so Back returns there rather than to
+  // the previous jump target.
+  const panelPageRef = useRef<{ left: number; right: number }>({ left: 1, right: 1 });
+
+  // Record a discontinuous jump (link / TOC / bookmark / page-box) so Back
+  // returns to where we were. The slot we're leaving is pinned to `fromPage`
+  // (which may have changed via scrolling since the last navigation) before the
+  // destination is pushed; forward history is discarded.
+  const recordPanelJump = (panelId: 'left' | 'right', fromPage: number, toPage: number) => {
+    if (fromPage === toPage) return;
     setPanelHistory(prev => {
       const { stack, index } = prev[panelId];
-      if (stack[index] === pageNumber) return prev;
-
-      // Slice stack to discard forward history
-      const newStack = stack.slice(0, index + 1);
-      newStack.push(pageNumber);
-      
-      const trimmedStack = newStack.slice(-50);
-      return {
-        ...prev,
-        [panelId]: { stack: trimmedStack, index: trimmedStack.length - 1 }
-      };
+      const trimmed = stack.slice(0, index + 1);
+      if (trimmed.length === 0) trimmed.push(fromPage);
+      else trimmed[trimmed.length - 1] = fromPage;
+      if (trimmed[trimmed.length - 1] !== toPage) trimmed.push(toPage);
+      const capped = trimmed.slice(-50);
+      return { ...prev, [panelId]: { stack: capped, index: capped.length - 1 } };
     });
   };
 
@@ -345,26 +372,24 @@ export default function App() {
       } else if (direction === 'forward' && index < stack.length - 1) {
         newIndex = index + 1;
       }
+      if (newIndex === index) return prev;
 
-      if (newIndex !== index) {
-        const targetPage = stack[newIndex];
-        if (panelId === 'left') {
-          setLeftPanel(p => ({ ...p, currentPage: targetPage }));
-        } else {
-          setRightPanel(p => ({ ...p, currentPage: targetPage }));
-        }
-        return {
-          ...prev,
-          [panelId]: { stack, index: newIndex }
-        };
+      const targetPage = stack[newIndex];
+      // Keep the live ref in sync so a subsequent jump records the right origin.
+      panelPageRef.current[panelId] = targetPage;
+      if (panelId === 'left') {
+        setLeftPanel(p => ({ ...p, currentPage: targetPage }));
+      } else {
+        setRightPanel(p => ({ ...p, currentPage: targetPage }));
       }
-      return prev;
+      return { ...prev, [panelId]: { stack, index: newIndex } };
     });
   };
 
   // Initialize panel history stack when document is restored or loaded
   useEffect(() => {
     if (pdfDocument && isRestored) {
+      panelPageRef.current = { left: leftPanel.currentPage, right: rightPanel.currentPage };
       setPanelHistory({
         left: { stack: [leftPanel.currentPage], index: 0 },
         right: { stack: [rightPanel.currentPage], index: 0 }
@@ -379,10 +404,6 @@ export default function App() {
 
   // Toast notification
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-
-  // Tracking last history write coordinates to prevent floods
-  const lastLogTime = useRef<number>(0);
-  const lastLogPage = useRef<Record<'left' | 'right', number>>({ left: 1, right: 1 });
 
   // Sync ref to TOC for history component lookup
   useEffect(() => {
@@ -472,10 +493,6 @@ export default function App() {
     setDrawingsRegistry(localDrawings);
     setBookmarks(localBookmarks);
     setHistory(localHistory);
-
-    // Reset tracking refs for scroll logging
-    lastLogPage.current = { left: 1, right: 1 };
-    lastLogTime.current = 0;
 
     applySession(localSession);
     setIsRestored(true); // Allow saving now that the local state has been restored
@@ -695,31 +712,20 @@ export default function App() {
     }
   };
 
-  // Smart history registration
-  const registerViewpoint = (pageNumber: number, reason: 'jump' | 'read' | 'toc' | 'annotated' | 'scroll', panelId?: 'left' | 'right') => {
-    if (reason === 'scroll') return; // Handled as normal browsing, don't spam history logs
+  // Smart Viewpoints history. Records "anchor" pages worth returning to —
+  // reading dwells, jump destinations, and the spot you leave when following a
+  // reference. Plain scrolling and sequential paging are continuous browsing
+  // and are ignored. Each page appears once (most recent occurrence wins), so
+  // the list is a clean, jump-back-able set of viewpoints rather than a flood.
+  const registerViewpoint = (
+    pageNumber: number,
+    reason: 'jump' | 'read' | 'toc' | 'annotated' | 'scroll' | 'page'
+  ) => {
+    if (reason === 'scroll' || reason === 'page') return;
 
     const now = Date.now();
-    const lastPageVal = panelId ? lastLogPage.current[panelId] : 1;
 
-    // Filter rules
-    if (reason === 'read') {
-      // Dwell time: avoid logging duplicate read logs for the same page consecutively
-      const lastEntry = history[0];
-      if (lastEntry && lastEntry.pageNumber === pageNumber && lastEntry.reason === 'read') {
-        return;
-      }
-    } else if (reason === 'jump') {
-      // Quick flip filters: skip if jump is small (<= 2 pages) and fast (< 2.5s)
-      const pageDiff = Math.abs(pageNumber - lastPageVal);
-      const timeDiff = now - lastLogTime.current;
-      if (pageDiff <= 2 && timeDiff < 2500) {
-        if (panelId) lastLogPage.current[panelId] = pageNumber;
-        return;
-      }
-    }
-
-    // Lookup section title from TOC
+    // Lookup the enclosing section title from the TOC.
     let sectionName = '';
     const currentToc = tocRef.current;
     if (currentToc && currentToc.length > 0) {
@@ -736,48 +742,54 @@ export default function App() {
       pageNumber,
       sectionName: sectionName || undefined,
       timestamp: now,
-      reason: reason,
+      reason, // narrowed to a persisted reason by the guard above
     };
 
     setHistory(prev => {
-      const filtered = prev.filter(
-        item => !(item.pageNumber === pageNumber && item.reason === newEntry.reason && now - item.timestamp < 10000)
-      );
-      const updated = [newEntry, ...filtered].slice(0, 30);
+      // Collapse duplicates: a page already in the list moves to the top with
+      // its newest reason/timestamp rather than stacking another row.
+      const deduped = prev.filter(item => item.pageNumber !== pageNumber);
+      const updated = [newEntry, ...deduped].slice(0, 30);
       persist('history', updated);
       return updated;
     });
-
-    if (panelId) lastLogPage.current[panelId] = pageNumber;
-    lastLogTime.current = now;
   };
 
-  // Sync scroll & page updates between panels if linked
-  const handlePageChange = (panelId: 'left' | 'right', pageNumber: number, reason: 'jump' | 'read' | 'toc' | 'annotated' | 'scroll' = 'jump') => {
+  // Apply a page change for a panel and route it through history.
+  //   'jump' / 'toc' → discontinuous navigation: records Back/Forward + anchors.
+  //   'page'         → sequential prev/next paging: moves the view only.
+  //   'scroll'       → continuous scrolling: tracks position only.
+  const handlePageChange = (panelId: 'left' | 'right', pageNumber: number, reason: 'jump' | 'read' | 'toc' | 'annotated' | 'scroll' | 'page' = 'jump') => {
+    const fromPage = panelPageRef.current[panelId];
+    panelPageRef.current[panelId] = pageNumber;
+
+    const isJump = reason === 'jump' || reason === 'toc';
+
+    if (isJump) {
+      // Capture the back/forward jump, and log the page we left as a return
+      // anchor so the Smart Viewpoints list always lets you get back to where
+      // you were reading before following a reference.
+      recordPanelJump(panelId, fromPage, pageNumber);
+      registerViewpoint(fromPage, 'jump');
+    }
+
     if (panelId === 'left') {
       setLeftPanel(prev => ({ ...prev, currentPage: pageNumber }));
-      registerViewpoint(pageNumber, reason, 'left');
+      registerViewpoint(pageNumber, reason);
       if (linkedScrolling && reason !== 'scroll') {
-        setRightPanel(prev => ({ ...prev, currentPage: Math.min(pdfDocument?.numPages || pageNumber, pageNumber + 1) }));
+        const otherPage = Math.min(pdfDocument?.numPages || pageNumber, pageNumber + 1);
+        panelPageRef.current.right = otherPage;
+        setRightPanel(prev => ({ ...prev, currentPage: otherPage }));
+        if (isJump) recordPanelJump('right', fromPage + 1, otherPage);
       }
     } else {
       setRightPanel(prev => ({ ...prev, currentPage: pageNumber }));
-      registerViewpoint(pageNumber, reason, 'right');
+      registerViewpoint(pageNumber, reason);
       if (linkedScrolling && reason !== 'scroll') {
-        setLeftPanel(prev => ({ ...prev, currentPage: Math.max(1, pageNumber - 1) }));
-      }
-    }
-
-    // Add to back/forward navigation history if it's a jump, TOC click, or hyperlink click
-    if (reason === 'jump' || reason === 'toc' || reason === 'annotated') {
-      addToPanelHistory(panelId, pageNumber);
-      if (linkedScrolling) {
-        // In linked scrolling, the other panel also changes page, so log it too
-        const otherPanelId = panelId === 'left' ? 'right' : 'left';
-        const otherPage = panelId === 'left'
-          ? Math.min(pdfDocument?.numPages || pageNumber, pageNumber + 1)
-          : Math.max(1, pageNumber - 1);
-        addToPanelHistory(otherPanelId, otherPage);
+        const otherPage = Math.max(1, pageNumber - 1);
+        panelPageRef.current.left = otherPage;
+        setLeftPanel(prev => ({ ...prev, currentPage: otherPage }));
+        if (isJump) recordPanelJump('left', Math.max(1, fromPage - 1), otherPage);
       }
     }
   };
@@ -1248,7 +1260,7 @@ export default function App() {
               colorMap={COLOR_MAP}
               isBookmarked={bookmarks.some(b => b.pageNumber === leftPanel.currentPage)}
               onToggleBookmark={() => toggleBookmark(leftPanel.currentPage)}
-              registerViewpoint={(page, reason) => registerViewpoint(page, reason, 'left')}
+              registerViewpoint={(page, reason) => registerViewpoint(page, reason)}
               onSwitchToWhiteboard={() => setLeftPanel(prev => ({ ...prev, mode: 'whiteboard' }))}
               onFocusPanel={() => setFocusedPanel('left')}
               canGoBack={panelHistory.left.index > 0}
@@ -1293,7 +1305,7 @@ export default function App() {
                 colorMap={COLOR_MAP}
                 isBookmarked={bookmarks.some(b => b.pageNumber === rightPanel.currentPage)}
                 onToggleBookmark={() => toggleBookmark(rightPanel.currentPage)}
-                registerViewpoint={(page, reason) => registerViewpoint(page, reason, 'right')}
+                registerViewpoint={(page, reason) => registerViewpoint(page, reason)}
                 onSwitchToWhiteboard={() => setRightPanel(prev => ({ ...prev, mode: 'whiteboard' }))}
                 onFocusPanel={() => setFocusedPanel('right')}
                 canGoBack={panelHistory.right.index > 0}

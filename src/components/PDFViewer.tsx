@@ -24,7 +24,7 @@ interface PDFViewerProps {
   pdfDocument: pdfjsLib.PDFDocumentProxy | null;
   currentPage: number;
   zoom: number;
-  onPageChange: (pageNumber: number, reason: 'jump' | 'read' | 'toc' | 'annotated' | 'scroll') => void;
+  onPageChange: (pageNumber: number, reason: 'jump' | 'read' | 'toc' | 'annotated' | 'scroll' | 'page') => void;
   onZoomChange: (zoom: number) => void;
   drawingsRegistry: PageDrawingsRegistry;
   onSaveDrawings: (pageNumber: number, strokes: Stroke[]) => void;
@@ -405,15 +405,18 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
     }
   };
 
+  // Sequential paging is continuous reading, not a discontinuous jump, so it
+  // uses the 'page' reason: it moves the view without polluting the Back/Forward
+  // stack (which would otherwise make Back step one page at a time).
   const handlePrevPage = () => {
     if (currentPage > 1) {
-      onPageChange(currentPage - 1, 'jump');
+      onPageChange(currentPage - 1, 'page');
     }
   };
 
   const handleNextPage = () => {
     if (currentPage < numPages) {
-      onPageChange(currentPage + 1, 'jump');
+      onPageChange(currentPage + 1, 'page');
     }
   };
 
@@ -550,16 +553,13 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
             >
               <ChevronLeft size={15} />
             </button>
+            {/* Uncontrolled: commit only on Enter (handlePageInput) so typing a
+                multi-digit page doesn't jump through each intermediate value.
+                `key` remounts it to reflect external page changes. */}
             <input
               type="text"
               className="page-input"
-              value={currentPage}
-              onChange={(e) => {
-                const val = parseInt(e.target.value);
-                if (!isNaN(val) && val >= 1 && val <= numPages) {
-                  onPageChange(val, 'jump');
-                }
-              }}
+              defaultValue={currentPage}
               key={`${panelId}-${currentPage}`}
               onKeyDown={handlePageInput}
               onBlur={(e) => e.target.value = currentPage.toString()}
