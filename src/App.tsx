@@ -75,11 +75,14 @@ export default function App() {
   const [focusedPanel, setFocusedPanel] = useState<'left' | 'right'>('left');
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // Monitor browser fullscreen state changes (including F11 key window-level fullscreen)
+  // Monitor browser fullscreen state changes (including F11 key window-level
+  // fullscreen and the webkit-prefixed API used by Safari).
   useEffect(() => {
     const handleFullscreenChange = () => {
+      const doc = document as any;
       const isFs = (
         !!document.fullscreenElement ||
+        !!doc.webkitFullscreenElement ||
         (window.innerHeight === window.screen.height &&
          window.outerHeight !== undefined &&
          (window.outerHeight - window.innerHeight < 20))
@@ -89,23 +92,34 @@ export default function App() {
 
     window.addEventListener('resize', handleFullscreenChange);
     document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
     handleFullscreenChange(); // Initial check
 
     return () => {
       window.removeEventListener('resize', handleFullscreenChange);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
     };
   }, []);
 
-  // Toggle the browser Fullscreen API from the UI. (F11 window-fullscreen is
-  // still detected by the listener above, but can only be exited via F11.)
+  // Whether any Fullscreen API is available (absent on iPhone Safari).
+  const fullscreenSupported = (() => {
+    const el = document.documentElement as any;
+    return !!(el.requestFullscreen || el.webkitRequestFullscreen);
+  })();
+
+  // Toggle fullscreen, using the webkit-prefixed API on Safari. (F11
+  // window-fullscreen is still detected, but can only be exited via F11.)
   const toggleFullscreen = () => {
-    if (document.fullscreenElement) {
-      document.exitFullscreen?.();
-    } else {
-      document.documentElement.requestFullscreen?.().catch((err) => {
-        console.warn('Fullscreen request failed:', err);
-      });
+    const doc = document as any;
+    const el = document.documentElement as any;
+    const active = document.fullscreenElement || doc.webkitFullscreenElement;
+    if (active) {
+      (document.exitFullscreen || doc.webkitExitFullscreen)?.call(document);
+    } else if (el.requestFullscreen) {
+      el.requestFullscreen().catch((err: any) => console.warn('Fullscreen request failed:', err));
+    } else if (el.webkitRequestFullscreen) {
+      el.webkitRequestFullscreen();
     }
   };
 
@@ -952,14 +966,16 @@ export default function App() {
       {toastMessage && <div className="notification-toast">{toastMessage}</div>}
 
       {/* Auto-hiding floating fullscreen toggle (lower-right) */}
-      <button
-        className={`fullscreen-fab ${controlsVisible ? '' : 'hidden'}`}
-        onClick={toggleFullscreen}
-        title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
-        aria-label={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
-      >
-        {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
-      </button>
+      {fullscreenSupported && (
+        <button
+          className={`fullscreen-fab ${controlsVisible ? '' : 'hidden'}`}
+          onClick={toggleFullscreen}
+          title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+          aria-label={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+        >
+          {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
+        </button>
+      )}
 
       {/* Header */}
       <header className="app-header">

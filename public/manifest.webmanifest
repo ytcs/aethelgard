@@ -1,0 +1,19 @@
+{
+  "name": "Aethelgard Reader",
+  "short_name": "Aethelgard",
+  "description": "Minimalist technical book reader with annotations and cloud sync.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b0c10",
+  "theme_color": "#0b0c10",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

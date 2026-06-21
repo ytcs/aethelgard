@@ -34,6 +34,12 @@
   box-sizing: inherit;
 }
 
+html, body {
+  /* Stop the document-level rubber-band gesture iOS uses to dismiss
+     fullscreen, and keep scrolling contained to the reading panels. */
+  overscroll-behavior: none;
+}
+
 body {
   margin: 0;
   padding: 0;
@@ -41,12 +47,18 @@ body {
   color: var(--text-primary);
   font-family: var(--font-sans);
   overflow: hidden;
+  /* Use small-viewport units where supported so iOS toolbar changes don't
+     resize the layout (falls back to vh on older browsers). */
   height: 100vh;
+  height: 100svh;
   width: 100vw;
+  position: fixed; /* lock the body so only the panels scroll on iOS */
+  inset: 0;
 }
 
 #root {
   height: 100vh;
+  height: 100svh;
   width: 100vw;
   display: flex;
   flex-direction: column;
@@ -477,6 +489,8 @@ body {
   align-items: flex-start;
   padding: 20px;
   background: #0b0c10;
+  -webkit-overflow-scrolling: touch; /* momentum scrolling on iOS */
+  overscroll-behavior: contain;      /* don't chain scroll to the page/body */
 }
 
 .pdf-page-container {

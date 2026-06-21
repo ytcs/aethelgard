@@ -58,15 +58,21 @@ export const PDFPageRender: React.FC<PDFPageRenderProps> = ({
 
         const baseViewport = page.getViewport({ scale: 1.0 });
         const scale = width / baseViewport.width;
+        // CSS-space viewport (used for the annotation layer, which is sized in
+        // CSS px). The canvas backing store is rendered at devicePixelRatio for
+        // crispness on retina/iPad displays, clamped to 2 so memory stays bounded.
         const pageViewport = page.getViewport({ scale });
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const renderViewport = page.getViewport({ scale: scale * dpr });
 
-        // Set canvas buffer sizes to match the page viewport
-        canvas.width = pageViewport.width;
-        canvas.height = pageViewport.height;
+        // Backing store is in device pixels; CSS size stays at width×height (the
+        // canvas element fills its parent at 100%), so it displays sharply.
+        canvas.width = Math.floor(renderViewport.width);
+        canvas.height = Math.floor(renderViewport.height);
 
         const renderContext = {
           canvasContext: ctx,
-          viewport: pageViewport,
+          viewport: renderViewport,
         } as any;
 
         renderTask = page.render(renderContext);
@@ -359,6 +365,9 @@ export const PDFPageRender: React.FC<PDFPageRenderProps> = ({
           zIndex: 2,
           cursor: tool === 'select' ? 'default' : 'crosshair',
           pointerEvents: tool === 'select' ? 'none' : 'auto',
+          // While a drawing tool is active, stop the browser from scrolling/
+          // zooming the page on touch so strokes land cleanly on iPad.
+          touchAction: tool === 'select' ? 'auto' : 'none',
         }}
         onMouseDown={handleStart}
         onMouseMove={handleMove}

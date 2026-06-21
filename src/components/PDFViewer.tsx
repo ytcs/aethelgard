@@ -14,6 +14,10 @@ import {
   ArrowRight
 } from 'lucide-react';
 
+// Stable reference for pages with no drawings, so PDFPageRender's draw effect
+// (keyed on the drawings array) doesn't re-run for blank pages on every render.
+const EMPTY_STROKES: Stroke[] = [];
+
 interface PDFViewerProps {
   panelId: 'left' | 'right';
   pdfDocument: pdfjsLib.PDFDocumentProxy | null;
@@ -74,7 +78,12 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
   const basePageWidthRef = useRef<number>(600);
   const scrollRatioRef = useRef<number | null>(null);
   const isFirstDimensionsReadyRef = useRef<boolean>(true);
-  
+
+  // Keep a live ref to onPageChange so the scroll listener never goes stale and
+  // we don't have to re-subscribe it on every parent render.
+  const onPageChangeRef = useRef(onPageChange);
+  onPageChangeRef.current = onPageChange;
+
   const [numPages, setNumPages] = useState<number>(0);
   const [renderedPages, setRenderedPages] = useState<Record<number, boolean>>({});
   const [pageWidth, setPageWidth] = useState<number>(600);
@@ -198,7 +207,8 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
         isScrollingToPageRef.current = true;
         pageEl.scrollIntoView({ behavior: 'auto', block: 'start' });
         lastScrolledPageRef.current = currentPage;
-        
+        mountVisiblePages(); // mount the destination immediately (no blank frame)
+
         if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
         scrollTimeoutRef.current = setTimeout(() => {
           isScrollingToPageRef.current = false;
@@ -219,85 +229,77 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
     }
   }, [currentPage, numPages, pdfDocument, dimensionsReady]);
 
-  // Setup page intersection observer to mount canvases dynamically (Caches Rendered Canvases)
-  useEffect(() => {
-    if (!pdfDocument || numPages === 0 || !containerRef.current) return;
+  // Window of pages to keep mounted on each side of the viewport. Small enough
+  // to bound canvas memory (critical on iOS), large enough for smooth scroll.
+  const MOUNT_BUFFER = 2;
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        setRenderedPages((prev) => {
-          let updated = prev;
-          entries.forEach((entry) => {
-            if (entry.isIntersecting) {
-              const pNum = Number(entry.target.getAttribute('data-page'));
-              if (!prev[pNum]) {
-                if (updated === prev) updated = { ...prev };
-                updated[pNum] = true; // Cache: once true, stays true in this zoom session!
-              }
-            }
-          });
-          return updated;
-        });
-      },
-      {
-        root: containerRef.current,
-        rootMargin: '400px 0px 400px 0px', // Preloads pages 400px before scroll for seamless load
-        threshold: 0.01,
+  // Compute which pages are visible directly from the scroll position and mount
+  // only those (plus a small buffer), unmounting the rest. This replaces an
+  // IntersectionObserver, which does not reliably fire inside an overflow scroll
+  // container on iOS WebKit — there the canvases never mounted and pages showed
+  // blank. Pages are uniformly sized, so the visible range is exact. As a bonus,
+  // this is true virtualization: a 1500-page document keeps only ~10 canvases
+  // alive instead of accumulating every page ever scrolled past.
+  const mountVisiblePages = () => {
+    const container = containerRef.current;
+    if (!container || numPages === 0) return;
+    const stride = pageHeight + 15; // page height + marginBottom
+    if (stride <= 0) return;
+    const padTop = 20; // .panel-viewport top padding
+    const top = container.scrollTop;
+    const viewH = container.clientHeight;
+
+    const first = Math.max(1, Math.floor((top - padTop) / stride) + 1 - MOUNT_BUFFER);
+    const last = Math.min(numPages, Math.floor((top - padTop + viewH) / stride) + 1 + MOUNT_BUFFER);
+
+    setRenderedPages((prev) => {
+      const next: Record<number, boolean> = {};
+      for (let p = first; p <= last; p++) next[p] = true;
+      // Only update state if the visible window actually changed.
+      const prevKeys = Object.keys(prev);
+      if (prevKeys.length === last - first + 1 && prevKeys.every((k) => next[Number(k)])) {
+        return prev;
       }
-    );
+      return next;
+    });
 
-    const currentRefs = pageRefs.current;
-    for (let p = 1; p <= numPages; p++) {
-      const ref = currentRefs[p];
-      if (ref) observer.observe(ref);
+    // Track the page nearest the viewport center as the active page.
+    if (!isScrollingToPageRef.current && !isInitRef.current) {
+      const center = Math.min(
+        numPages,
+        Math.max(1, Math.floor((top - padTop + viewH / 2) / stride) + 1)
+      );
+      if (center !== lastScrolledPageRef.current) {
+        lastScrolledPageRef.current = center;
+        onPageChangeRef.current(center, 'scroll');
+      }
     }
+  };
 
-    return () => {
-      for (let p = 1; p <= numPages; p++) {
-        const ref = currentRefs[p];
-        if (ref) observer.unobserve(ref);
-      }
-      observer.disconnect();
-    };
-  }, [pdfDocument, numPages]);
-
-  // Setup active page scroll tracking observer (observes center of viewport)
+  // Mount the initial window and keep it in sync with scrolling. rAF-throttled
+  // so momentum scrolling stays smooth across platforms.
   useEffect(() => {
-    if (!pdfDocument || numPages === 0 || !containerRef.current) return;
+    const container = containerRef.current;
+    if (!container || numPages === 0 || !dimensionsReady) return;
 
-    const activePageObserver = new IntersectionObserver(
-      (entries) => {
-        if (isScrollingToPageRef.current || isInitRef.current) return;
+    mountVisiblePages(); // initial mount — no scroll event needed (fixes iOS)
 
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            const pNum = Number(entry.target.getAttribute('data-page'));
-            lastScrolledPageRef.current = pNum; // Log scroll event target
-            onPageChange(pNum, 'scroll');
-          }
-        });
-      },
-      {
-        root: containerRef.current,
-        rootMargin: '-45% 0px -45% 0px',
-        threshold: 0,
-      }
-    );
-
-    const currentRefs = pageRefs.current;
-    for (let p = 1; p <= numPages; p++) {
-      const ref = currentRefs[p];
-      if (ref) activePageObserver.observe(ref);
-    }
-
-    return () => {
-      for (let p = 1; p <= numPages; p++) {
-        const ref = currentRefs[p];
-        if (ref) activePageObserver.unobserve(ref);
-      }
-      activePageObserver.disconnect();
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        mountVisiblePages();
+      });
     };
-  }, [pdfDocument, numPages]);
+    container.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      container.removeEventListener('scroll', onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+    // mountVisiblePages closes over numPages/pageHeight, which are in the deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdfDocument, numPages, dimensionsReady, pageHeight]);
 
   // Navigation handlers
   const handlePageInput = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -354,6 +356,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
     }
 
     container.scrollTop = Math.max(0, target);
+    mountVisiblePages(); // mount the destination page immediately
 
     if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
     scrollTimeoutRef.current = setTimeout(() => {
@@ -389,7 +392,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
               pageNumber={p}
               width={pageWidth}
               height={pageHeight}
-              drawings={drawingsRegistry[p] || []}
+              drawings={drawingsRegistry[p] || EMPTY_STROKES}
               onSaveDrawings={(strokes) => onSaveDrawings(p, strokes)}
               tool={tool}
               color={color}

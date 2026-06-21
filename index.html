@@ -2,9 +2,20 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Aethelgard Technical Book Reader</title>
+
+    <!-- PWA / iOS standalone: lets "Add to Home Screen" run the reader truly
+         full-screen (no Safari chrome), which — unlike the in-browser Fullscreen
+         API — does not exit when you scroll. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Aethelgard" />
+    <meta name="theme-color" content="#0b0c10" />
+    <link rel="apple-touch-icon" href="favicon.svg" />
+    <link rel="manifest" href="manifest.webmanifest" />
     <!-- Google Fonts: Outfit and Inter -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
