@@ -46,10 +46,16 @@ export function installGlobalErrorCapture() {
     dlog(`unhandledrejection: ${r?.name || ''} ${r?.message || String(r)}`);
   });
   // One-time environment snapshot.
+  const el = document.documentElement as any;
+  const standalone =
+    (navigator as any).standalone === true ||
+    (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
   dlog(
     `env: dpr=${window.devicePixelRatio} ` +
       `screen=${window.screen?.width}x${window.screen?.height} ` +
       `inner=${window.innerWidth}x${window.innerHeight} ` +
+      `fsAPI=req:${!!el.requestFullscreen}/wk:${!!el.webkitRequestFullscreen} ` +
+      `standalone=${standalone} ` +
       `ua=${navigator.userAgent}`
   );
 }

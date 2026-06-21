@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Generated at build time from node_modules/pdfjs-dist (copy-pdf-assets.mjs)
+public/cmaps
+public/standard_fonts
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

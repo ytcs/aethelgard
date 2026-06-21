@@ -62,6 +62,17 @@ import { dlog, installGlobalErrorCapture } from './debug';
 installGlobalErrorCapture();
 dlog(`pdfjs v${(pdfjsLib as any).version} workerSrc=${pdfWorker}`);
 
+// Tell pdf.js where to fetch its cMap and standard-font data (copied into the
+// build by scripts/copy-pdf-assets.mjs). Required for PDFs whose fonts aren't
+// embedded — without these pdf.js substitutes platform fonts, which render
+// warped/mis-kerned on devices like iPad. Absolute (base-prefixed) URLs so the
+// worker resolves them regardless of its own location.
+const PDF_DOC_OPTS = {
+  cMapUrl: import.meta.env.BASE_URL + 'cmaps/',
+  cMapPacked: true,
+  standardFontDataUrl: import.meta.env.BASE_URL + 'standard_fonts/',
+};
+
 // Nordic Minimalism Palette - Muted earth tones gentle on the eyes
 const COLOR_MAP: Record<DrawingColor, string> = {
   cyan: '#7ea1a6',   // Soft Lichen Teal
@@ -382,7 +393,7 @@ export default function App() {
           setBookId(cached.bookId);
           setPdfFilename(cached.filename);
           setLoading(true);
-          const loadingTask = pdfjsLib.getDocument({ data: cached.data });
+          const loadingTask = pdfjsLib.getDocument({ data: cached.data, ...PDF_DOC_OPTS });
           const doc = await loadingTask.promise;
           setPdfDocument(doc);
           setLoading(false);
@@ -523,7 +534,7 @@ export default function App() {
       setBookId(uploadId);
       setPdfFilename(file.name);
 
-      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer, ...PDF_DOC_OPTS });
       const doc = await loadingTask.promise;
       setPdfDocument(doc);
       setLoading(false);
@@ -555,7 +566,7 @@ export default function App() {
       setBookId(book.id);
       setPdfFilename(book.title);
 
-      const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      const doc = await pdfjsLib.getDocument({ data: arrayBuffer, ...PDF_DOC_OPTS }).promise;
       setPdfDocument(doc);
       setLoading(false);
       showToast(`Opened "${book.title}".`);
