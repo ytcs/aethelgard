@@ -71,11 +71,18 @@ const PDF_DOC_OPTS = {
   cMapUrl: import.meta.env.BASE_URL + 'cmaps/',
   cMapPacked: true,
   standardFontDataUrl: import.meta.env.BASE_URL + 'standard_fonts/',
-  // Render glyphs as canvas paths instead of loading each embedded font via the
-  // browser's FontFace API. WebKit/iOS often rejects pdf.js's synthesized OTF
-  // fonts and silently substitutes a system font with different metrics, which
-  // shows up as warped/mis-kerned text (only on iOS — Blink accepts them). Path
-  // rendering is engine-independent, so text matches desktop everywhere.
+  // pdf.js v6 evaluates embedded font programs via WebAssembly (quickjs-eval).
+  // Vite can't bundle its fully-dynamic wasm import, so without an explicit
+  // wasmUrl the wasm never loads; on iOS WebKit the no-wasm fallback fails
+  // during font parsing and pdf.js substitutes standard fonts (sans-serif, with
+  // broken math glyphs — e.g. ∑ renders as "P"). Blink's fallback happens to
+  // work, which is why only iOS was affected. iccUrl serves the colour profiles.
+  wasmUrl: import.meta.env.BASE_URL + 'wasm/',
+  iccUrl: import.meta.env.BASE_URL + 'iccs/',
+  // Use the document's embedded fonts, never the local system's.
+  useSystemFonts: false,
+  // Draw glyphs as canvas paths rather than via the browser FontFace API, which
+  // WebKit/iOS can reject for pdf.js's synthesized OTF fonts. Engine-independent.
   disableFontFace: true,
 };
 

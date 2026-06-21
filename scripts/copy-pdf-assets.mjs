@@ -11,7 +11,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const src = resolve(root, 'node_modules/pdfjs-dist');
 const pub = resolve(root, 'public');
 
-for (const dir of ['cmaps', 'standard_fonts']) {
+for (const dir of ['cmaps', 'standard_fonts', 'wasm', 'iccs']) {
   cpSync(resolve(src, dir), resolve(pub, dir), { recursive: true });
   console.log(`[copy-pdf-assets] public/${dir}`);
 }

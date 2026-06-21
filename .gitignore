@@ -15,6 +15,8 @@ dist-ssr
 # Generated at build time from node_modules/pdfjs-dist (copy-pdf-assets.mjs)
 public/cmaps
 public/standard_fonts
+public/wasm
+public/iccs
 
 # Editor directories and files
 .vscode/*
