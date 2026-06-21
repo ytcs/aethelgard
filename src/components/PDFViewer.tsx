@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState, useLayoutEffect } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import type { Stroke, DrawingTool, DrawingColor, BrushSize, PageDrawingsRegistry } from '../types';
 import { PDFPageRender } from './PDFPageRender';
+import { dlog } from '../debug';
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -135,8 +136,14 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
         setPageWidth(containerWidth);
         setPageHeight(containerWidth * ratio);
         setDimensionsReady(true);
-      } catch (err) {
+        dlog(
+          `${panelId} dimensions ready: containerW=${containerRef.current.clientWidth} ` +
+            `containerH=${containerRef.current.clientHeight} pageW=${Math.round(containerWidth)} ` +
+            `pageH=${Math.round(containerWidth * ratio)} ratio=${ratio.toFixed(3)} numPages=${pdfDocument.numPages}`
+        );
+      } catch (err: any) {
         console.error('Failed to initialize dimensions:', err);
+        dlog(`${panelId} initDimensions ERROR: ${err?.name || ''} ${err?.message || String(err)}`);
       }
     };
 
@@ -260,6 +267,10 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
       if (prevKeys.length === last - first + 1 && prevKeys.every((k) => next[Number(k)])) {
         return prev;
       }
+      dlog(
+        `${panelId} mount window: pages ${first}-${last} ` +
+          `(scrollTop=${Math.round(top)} viewH=${Math.round(viewH)} stride=${Math.round(stride)})`
+      );
       return next;
     });
 

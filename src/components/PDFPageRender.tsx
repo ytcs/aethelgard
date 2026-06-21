@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState } from 'react';
 import type { MouseEvent, TouchEvent } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import type { Stroke, Point, DrawingTool, DrawingColor, BrushSize } from '../types';
+import { dlog } from '../debug';
 
 interface PDFPageRenderProps {
   pdfDocument: pdfjsLib.PDFDocumentProxy;
@@ -70,6 +71,12 @@ export const PDFPageRender: React.FC<PDFPageRenderProps> = ({
         canvas.width = Math.floor(renderViewport.width);
         canvas.height = Math.floor(renderViewport.height);
 
+        dlog(
+          `p${pageNumber} render start: css=${Math.round(width)}x${Math.round(height)} ` +
+            `backing=${canvas.width}x${canvas.height} (${(canvas.width * canvas.height / 1e6).toFixed(1)}Mpx) ` +
+            `dpr=${dpr} scale=${scale.toFixed(3)}`
+        );
+
         const renderContext = {
           canvasContext: ctx,
           viewport: renderViewport,
@@ -77,6 +84,17 @@ export const PDFPageRender: React.FC<PDFPageRenderProps> = ({
 
         renderTask = page.render(renderContext);
         await renderTask.promise;
+
+        // Sample a center pixel to detect the iOS "blank canvas" failure mode,
+        // where render() resolves successfully but the backing store is empty.
+        try {
+          const cx = Math.floor(canvas.width / 2);
+          const cy = Math.floor(canvas.height / 2);
+          const px = ctx.getImageData(cx, cy, 1, 1).data;
+          dlog(`p${pageNumber} render OK; center px=[${px[0]},${px[1]},${px[2]},${px[3]}]`);
+        } catch (sampleErr: any) {
+          dlog(`p${pageNumber} render OK; getImageData failed: ${sampleErr?.message}`);
+        }
 
         // Render annotation layer for links/hyperlinks
         if (isCancelled) return;
@@ -172,6 +190,7 @@ export const PDFPageRender: React.FC<PDFPageRenderProps> = ({
       } catch (err: any) {
         if (err.name !== 'RenderingCancelledException') {
           console.error(`Error rendering page ${pageNumber}:`, err);
+          dlog(`p${pageNumber} render ERROR: ${err?.name || ''} ${err?.message || String(err)}`);
         }
       }
     };

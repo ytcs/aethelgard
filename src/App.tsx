@@ -56,6 +56,10 @@ import 'pdfjs-dist/web/pdf_viewer.css';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
+import { dlog, installGlobalErrorCapture } from './debug';
+installGlobalErrorCapture();
+dlog(`pdfjs v${(pdfjsLib as any).version} workerSrc=${pdfWorker}`);
+
 // Nordic Minimalism Palette - Muted earth tones gentle on the eyes
 const COLOR_MAP: Record<DrawingColor, string> = {
   cyan: '#7ea1a6',   // Soft Lichen Teal
@@ -72,6 +76,10 @@ export default function App() {
   const [layoutMode, setLayoutMode] = useState<'single' | 'split'>('single');
   const [linkedScrolling, setLinkedScrolling] = useState(false);
   const [globalZoom, setGlobalZoom] = useState(1.0);
+  // Remember the zoom level per layout mode. Single and split panels fit to
+  // different widths, so switching split→single must restore the wider
+  // single-view zoom instead of leaving the narrow split zoom in place.
+  const zoomByMode = useRef<{ single?: number; split?: number }>({});
   const [focusedPanel, setFocusedPanel] = useState<'left' | 'right'>('left');
   const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -201,6 +209,8 @@ export default function App() {
   const bookIdRef = useRef<string | null>(null);
   useEffect(() => { sessionRef.current = session; isOwnerRef.current = isOwner; }, [session, isOwner]);
   useEffect(() => { bookIdRef.current = bookId; }, [bookId]);
+  // Keep per-mode zoom memory current as the user zooms within a mode.
+  useEffect(() => { zoomByMode.current[layoutMode] = globalZoom; }, [globalZoom, layoutMode]);
 
   // Establish the session on mount and keep it in sync with auth changes.
   useEffect(() => {
@@ -845,8 +855,16 @@ export default function App() {
 
   // Change Layout
   const toggleLayoutMode = (mode: 'single' | 'split') => {
+    if (mode === layoutMode) return;
+    // Persist the current mode's zoom before leaving, then restore the target
+    // mode's remembered zoom (if any) so single view doesn't keep split's
+    // narrower zoom. First-ever entry into a mode has no memory, so the panel's
+    // fit-to-width takes over as before.
+    zoomByMode.current[layoutMode] = globalZoom;
     setLayoutMode(mode);
     localStorage.setItem('aethelgard_layout_mode', mode);
+    const remembered = zoomByMode.current[mode];
+    if (remembered != null) setGlobalZoom(remembered);
   };
 
   // Clear history

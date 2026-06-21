@@ -763,3 +763,45 @@ body {
 .app-root.is-fullscreen .app-container {
   height: 100vh;
 }
+
+/* ---- Mobile / narrow-screen responsiveness ----
+   The header packs many labeled buttons into one row, which overflows on phones
+   and small tablets. Keep the bar one fixed-height line but let the controls
+   scroll horizontally (swipe), and tighten spacing so more fits per screen. */
+@media (max-width: 820px) {
+  .app-header {
+    padding: 0 10px;
+    gap: 8px;
+  }
+  .logo-container {
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .logo-text {
+    font-size: 1rem;
+    margin-left: 0 !important;
+  }
+  /* Hide the small "READER" subtitle to reclaim width. */
+  .logo-container > span {
+    display: none;
+  }
+  .header-controls {
+    gap: 8px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    /* fade the right edge as a hint that there's more to swipe */
+    -webkit-mask-image: linear-gradient(to right, #000 90%, transparent);
+    mask-image: linear-gradient(to right, #000 90%, transparent);
+  }
+  .header-controls::-webkit-scrollbar {
+    display: none;
+  }
+  .header-btn {
+    flex-shrink: 0;
+    padding: 6px 9px;
+    font-size: 0.7rem;
+  }
+}
