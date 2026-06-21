@@ -1,3 +1,5 @@
+// Must run before pdf.js: installs Map.getOrInsertComputed for WebKit/iOS.
+import './lib/mapPolyfill'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'

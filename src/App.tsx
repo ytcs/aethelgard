@@ -53,7 +53,9 @@ import {
 } from './lib/cloud';
 import 'pdfjs-dist/web/pdf_viewer.css';
 
-import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+// Use our custom worker entry (real pdf.js worker + getOrInsertComputed polyfill)
+// so rendering works on WebKit/iOS. Vite emits it as an ES-module worker URL.
+import pdfWorker from './pdf.worker.entry?worker&url';
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 import { dlog, installGlobalErrorCapture } from './debug';
