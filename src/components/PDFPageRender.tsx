@@ -77,6 +77,17 @@ export const PDFPageRender: React.FC<PDFPageRenderProps> = ({
         const annotationLayerDiv = annotationLayerRef.current;
         if (annotationLayerDiv) {
           annotationLayerDiv.innerHTML = '';
+
+          // pdf.js sizes the annotation layer via setLayerDimensions(), which
+          // reads these CSS variables. They're normally provided by pdf.js's
+          // `.pdfViewer .page` wrapper, which we don't use — so we must set them
+          // here, or the layer collapses and link hotspots become unclickable.
+          annotationLayerDiv.style.setProperty('--scale-factor', String(scale));
+          annotationLayerDiv.style.setProperty('--total-scale-factor', String(scale));
+          annotationLayerDiv.style.setProperty('--user-unit', '1');
+          annotationLayerDiv.style.setProperty('--scale-round-x', '1px');
+          annotationLayerDiv.style.setProperty('--scale-round-y', '1px');
+
           const annotations = await page.getAnnotations();
           if (isCancelled) return;
 
