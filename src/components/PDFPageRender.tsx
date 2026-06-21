@@ -291,6 +291,12 @@ export const PDFPageRender: React.FC<PDFPageRenderProps> = ({
   const handleStart = (e: MouseEvent<HTMLCanvasElement> | TouchEvent<HTMLCanvasElement>) => {
     onPanelFocus();
     if (tool === 'select') return;
+    // Two-finger gesture = pinch-zoom, not a drawing stroke. Ignore it here so
+    // the viewer's pinch handler takes over without leaving a stray mark.
+    if ('touches' in e && e.touches.length > 1) {
+      if (isDrawing) handleEnd();
+      return;
+    }
     const coord = getCoordinates(e);
     if (!coord) return;
 
@@ -315,6 +321,11 @@ export const PDFPageRender: React.FC<PDFPageRenderProps> = ({
 
   const handleMove = (e: MouseEvent<HTMLCanvasElement> | TouchEvent<HTMLCanvasElement>) => {
     if (!isDrawing) return;
+    // A second finger landed mid-stroke: abandon drawing in favour of pinch.
+    if ('touches' in e && e.touches.length > 1) {
+      handleEnd();
+      return;
+    }
     const coord = getCoordinates(e);
     if (!coord) return;
 

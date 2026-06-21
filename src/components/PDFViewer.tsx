@@ -70,6 +70,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
   isFocused,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const isScrollingToPageRef = useRef<boolean>(false);
   const scrollTimeoutRef = useRef<any>(null);
@@ -84,6 +85,12 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
   // we don't have to re-subscribe it on every parent render.
   const onPageChangeRef = useRef(onPageChange);
   onPageChangeRef.current = onPageChange;
+
+  // Live refs for the pinch-zoom listener (attached once, must not go stale).
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  const onZoomChangeRef = useRef(onZoomChange);
+  onZoomChangeRef.current = onZoomChange;
 
   const [numPages, setNumPages] = useState<number>(0);
   const [renderedPages, setRenderedPages] = useState<Record<number, boolean>>({});
@@ -312,6 +319,80 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdfDocument, numPages, dimensionsReady, pageHeight]);
 
+  // Pinch-to-zoom (touch devices). During the gesture we apply a live CSS
+  // transform to the page stage — cheap and smooth, no canvas re-render — pinned
+  // to the focal point between the fingers so it zooms where you pinch. On
+  // release we commit the real zoom once, which re-renders the pages crisply at
+  // the new scale (and the existing scroll-ratio logic keeps your place).
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const pinch = { active: false, startDist: 0, startZoom: 1, applied: 1 };
+    const distOf = (t: TouchList) =>
+      Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 2) return;
+      const stage = stageRef.current;
+      if (!stage) return;
+      pinch.active = true;
+      pinch.startDist = distOf(e.touches);
+      pinch.startZoom = zoomRef.current;
+      pinch.applied = 1;
+      isScrollingToPageRef.current = true; // suppress page-tracking during pinch
+      const rect = stage.getBoundingClientRect();
+      const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+      const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+      stage.style.transformOrigin = `${midX - rect.left}px ${midY - rect.top}px`;
+      stage.style.willChange = 'transform';
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (!pinch.active || e.touches.length !== 2) return;
+      e.preventDefault(); // stop the browser from scrolling/zooming mid-pinch
+      const raw = distOf(e.touches) / pinch.startDist;
+      // Clamp so the resulting absolute zoom stays within bounds.
+      const target = Math.max(0.5, Math.min(3.0, pinch.startZoom * raw));
+      pinch.applied = target / pinch.startZoom;
+      if (stageRef.current) stageRef.current.style.transform = `scale(${pinch.applied})`;
+    };
+
+    const endPinch = () => {
+      if (!pinch.active) return;
+      pinch.active = false;
+      const stage = stageRef.current;
+      if (stage) {
+        stage.style.transform = '';
+        stage.style.transformOrigin = '';
+        stage.style.willChange = '';
+      }
+      const finalZoom = Math.max(0.5, Math.min(3.0, pinch.startZoom * pinch.applied));
+      if (Math.abs(finalZoom - pinch.startZoom) > 0.001) {
+        onZoomChangeRef.current(finalZoom);
+      }
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+      scrollTimeoutRef.current = setTimeout(() => {
+        isScrollingToPageRef.current = false;
+      }, 200);
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      if (pinch.active && e.touches.length < 2) endPinch();
+    };
+
+    container.addEventListener('touchstart', onTouchStart, { passive: true });
+    container.addEventListener('touchmove', onTouchMove, { passive: false });
+    container.addEventListener('touchend', onTouchEnd, { passive: true });
+    container.addEventListener('touchcancel', onTouchEnd, { passive: true });
+    return () => {
+      container.removeEventListener('touchstart', onTouchStart);
+      container.removeEventListener('touchmove', onTouchMove);
+      container.removeEventListener('touchend', onTouchEnd);
+      container.removeEventListener('touchcancel', onTouchEnd);
+    };
+  }, []);
+
   // Navigation handlers
   const handlePageInput = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -515,8 +596,14 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
         </div>
       </div>
 
-      <div ref={containerRef} className="panel-viewport" style={{ overflowY: 'auto' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+      <div
+        ref={containerRef}
+        className="panel-viewport"
+        // Allow vertical/horizontal panning but reserve pinch gestures for our
+        // own zoom handler (otherwise iOS performs a native page zoom instead).
+        style={{ overflowY: 'auto', touchAction: 'pan-x pan-y' }}
+      >
+        <div ref={stageRef} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
           {pdfDocument ? renderPagesStack() : (
             <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '100px' }}>
               No document loaded
