@@ -71,6 +71,12 @@ const PDF_DOC_OPTS = {
   cMapUrl: import.meta.env.BASE_URL + 'cmaps/',
   cMapPacked: true,
   standardFontDataUrl: import.meta.env.BASE_URL + 'standard_fonts/',
+  // Render glyphs as canvas paths instead of loading each embedded font via the
+  // browser's FontFace API. WebKit/iOS often rejects pdf.js's synthesized OTF
+  // fonts and silently substitutes a system font with different metrics, which
+  // shows up as warped/mis-kerned text (only on iOS — Blink accepts them). Path
+  // rendering is engine-independent, so text matches desktop everywhere.
+  disableFontFace: true,
 };
 
 // Nordic Minimalism Palette - Muted earth tones gentle on the eyes
