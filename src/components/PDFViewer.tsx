@@ -323,6 +323,47 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
     }
   };
 
+  // Jump to an internal-link destination, scrolling to the exact vertical
+  // position within the target page rather than just aligning the page top.
+  // Page placeholder divs always exist at their correct sizes, so the offset is
+  // accurate even before the target page's canvas has lazily rendered.
+  const scrollToDestination = (targetPage: number, destTop?: number) => {
+    const container = containerRef.current;
+    const pageEl = pageRefs.current[targetPage];
+    if (!container || !pageEl) {
+      onPageChange(targetPage, 'jump');
+      return;
+    }
+
+    // Mark this page as already handled so the currentPage effect doesn't
+    // re-scroll to the page top and clobber our precise position.
+    lastScrolledPageRef.current = targetPage;
+    isScrollingToPageRef.current = true;
+
+    const containerRect = container.getBoundingClientRect();
+    const pageRect = pageEl.getBoundingClientRect();
+    let target = container.scrollTop + (pageRect.top - containerRect.top);
+
+    if (destTop != null) {
+      const basePageHeightPoints = basePageWidthRef.current * aspectRatio;
+      if (basePageHeightPoints > 0) {
+        // destTop is measured in PDF points from the page bottom.
+        const ratioFromTop = (basePageHeightPoints - destTop) / basePageHeightPoints;
+        target += Math.max(0, ratioFromTop) * pageHeight - 24; // 24px breathing room above
+      }
+    }
+
+    container.scrollTop = Math.max(0, target);
+
+    if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+    scrollTimeoutRef.current = setTimeout(() => {
+      isScrollingToPageRef.current = false;
+    }, 250);
+
+    // Update app-level state (active page, history, bookmark button).
+    onPageChange(targetPage, 'jump');
+  };
+
   // Generate page list elements
   const renderPagesStack = () => {
     const list = [];
@@ -356,7 +397,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
               colorMap={colorMap}
               onDrawStart={() => registerViewpoint(p, 'annotated')}
               onPanelFocus={onFocusPanel}
-              onJumpToPage={(targetPage) => onPageChange(targetPage, 'jump')}
+              onJumpToPage={(targetPage, destTop) => scrollToDestination(targetPage, destTop)}
             />
           )}
         </div>

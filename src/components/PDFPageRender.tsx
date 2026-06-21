@@ -16,7 +16,7 @@ interface PDFPageRenderProps {
   colorMap: Record<DrawingColor, string>;
   onDrawStart: () => void;
   onPanelFocus: () => void;
-  onJumpToPage?: (pageNumber: number) => void;
+  onJumpToPage?: (pageNumber: number, destTop?: number) => void;
 }
 
 export const PDFPageRender: React.FC<PDFPageRenderProps> = ({
@@ -105,8 +105,19 @@ export const PDFPageRender: React.FC<PDFPageRenderProps> = ({
                   const destRef = targetDest[0];
                   const pageIdx = await pdfDocument.getPageIndex(destRef);
                   const targetPage = pageIdx + 1;
+
+                  // Extract the destination's vertical position (PDF points,
+                  // measured from the page bottom) so we can scroll to the exact
+                  // spot rather than just the top of the page. The coordinate's
+                  // position in the array depends on the fit mode.
+                  const mode = targetDest[1]?.name;
+                  let destTop: number | undefined;
+                  if (mode === 'XYZ') destTop = targetDest[3] ?? undefined;       // [ref, XYZ, left, top, zoom]
+                  else if (mode === 'FitH' || mode === 'FitBH') destTop = targetDest[2] ?? undefined; // [ref, FitH, top]
+                  else if (mode === 'FitR') destTop = targetDest[5] ?? undefined; // [ref, FitR, left, bottom, right, top]
+
                   if (onJumpToPage) {
-                    onJumpToPage(targetPage);
+                    onJumpToPage(targetPage, destTop);
                   }
                 }
               } catch (err) {
