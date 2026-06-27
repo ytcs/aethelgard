@@ -15,4 +15,9 @@ export const LIBRARY: LibraryBook[] = [
     title: 'Graphon Mean Field Games',
     file: 'library/mfg/main.pdf',
   },
+  {
+    id: 'qft',
+    title: 'Modern Quantum Field Theory: From Foundations to the Frontier',
+    file: 'library/qft/main.pdf',
+  },
 ];
