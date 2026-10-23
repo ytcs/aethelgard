@@ -20,4 +20,9 @@ export const LIBRARY: LibraryBook[] = [
     title: 'Modern Quantum Field Theory: From Foundations to the Frontier',
     file: 'library/qft/main.pdf',
   },
+  {
+    id: 'extropic',
+    title: 'Thermodynamic Computing',
+    file: 'library/extropic/main.pdf',
+  },
 ];
